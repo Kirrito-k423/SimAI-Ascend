@@ -138,7 +138,8 @@ Sys::Sys(
     GPUType _gpu_type,
     std::vector<int>_all_gpus,
     std::vector<int>_NVSwitchs,
-    int _ngpus_per_node) {
+    int _ngpus_per_node,
+    CollectiveCostModelPrototype* _collective_cost_model_prototype) {
   scheduler_unit = nullptr;
   vLevels = nullptr;
   memBus = nullptr;
@@ -178,6 +179,7 @@ Sys::Sys(
   this->NVSwitchs = _NVSwitchs;
   this->all_gpus = _all_gpus;
   this->gpu_type = _gpu_type;
+  this->collective_cost_model_prototype = _collective_cost_model_prototype;
   this->ngpus_per_node = _ngpus_per_node;
   if ((id + npu_offset + 1) > all_generators.size()) {
     all_generators.resize(id + npu_offset + 1);

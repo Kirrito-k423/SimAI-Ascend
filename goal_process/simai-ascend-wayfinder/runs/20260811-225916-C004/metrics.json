@@ -1,0 +1,36 @@
+{
+  "run_id": "20260811-225916-C004",
+  "prototype_branch": "prototype/ascend-provider-seam",
+  "scripted_scenarios": {
+    "total": 6,
+    "passed": 6,
+    "legacy_analytical": "READY_LEGACY_CALBUSBW",
+    "legacy_simulation": "READY_LEGACY_MOCKNCCL",
+    "ascend_analytical": "READY_HCCL_COST_MODEL",
+    "ascend_simulation": "UNSUPPORTED_WITHOUT_FLOW_PROVIDER",
+    "profile_legacy_conflict": "CONFLICT",
+    "future_ascend_simulation": "READY_WITH_HCCL_FLOW_PROVIDER"
+  },
+  "builds": {
+    "baseline_analytical": {
+      "status": "PASS",
+      "seconds": 16.6
+    },
+    "prototype_analytical": {
+      "status": "PASS",
+      "seconds": 5.19
+    },
+    "prototype_simulation_core": {
+      "target": "libapplications-obj",
+      "status": "PASS",
+      "seconds": 6.06
+    },
+    "full_ns3": {
+      "status": "BLOCKED_BY_BASELINE_LINKER_ERROR",
+      "prototype_regression": false,
+      "signature": "macOS arm64 undefined symbols in upstream NS3 final link"
+    }
+  },
+  "performance_data": false,
+  "user_hitl": "PENDING"
+}

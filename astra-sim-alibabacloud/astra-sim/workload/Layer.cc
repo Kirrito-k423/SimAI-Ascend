@@ -951,6 +951,61 @@ Tick Layer::compute_time(
     return 0;
   }
 
+  // PROTOTYPE ONLY: an injected model owns Ascend Analytical cost lookup.
+  // A null model falls through to the byte-for-byte legacy GPU/cal_busbw path.
+  if (generator->collective_cost_model_prototype != nullptr) {
+    CollectiveCostRequestPrototype request;
+    switch (comtype) {
+      case ComType::Reduce_Scatter:
+        request.op = CollectiveOpPrototype::ReduceScatter;
+        break;
+      case ComType::All_Gather:
+        request.op = CollectiveOpPrototype::AllGather;
+        break;
+      case ComType::All_Reduce:
+        request.op = CollectiveOpPrototype::AllReduce;
+        break;
+      case ComType::All_to_All:
+        request.op = CollectiveOpPrototype::AllToAll;
+        break;
+      default:
+        request.op = CollectiveOpPrototype::Unknown;
+        break;
+    }
+    switch (group_type) {
+      case MockNccl::GroupType::TP:
+        request.group = CollectiveGroupPrototype::TP;
+        break;
+      case MockNccl::GroupType::DP:
+        request.group = CollectiveGroupPrototype::DP;
+        break;
+      case MockNccl::GroupType::PP:
+        request.group = CollectiveGroupPrototype::PP;
+        break;
+      case MockNccl::GroupType::EP:
+        request.group = CollectiveGroupPrototype::EP;
+        break;
+      case MockNccl::GroupType::DP_EP:
+        request.group = CollectiveGroupPrototype::DP_EP;
+        break;
+      default:
+        request.group = CollectiveGroupPrototype::Unknown;
+        break;
+    }
+    request.rank_count = nranks;
+    request.input_bytes = data_size;
+    request.tp_size = tp_size;
+    request.ep_size = ep_size;
+
+    CollectiveCostEstimatePrototype estimate =
+        generator->collective_cost_model_prototype->Estimate(request);
+    if (!estimate.supported) {
+      Sys::sys_panic(
+          "Injected collective cost model rejected request: " + estimate.reason);
+    }
+    return estimate.duration_ns;
+  }
+
 
     int n_ranks;
     int nnics;

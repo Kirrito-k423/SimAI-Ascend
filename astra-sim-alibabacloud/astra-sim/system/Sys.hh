@@ -25,6 +25,7 @@ LICENSE file in the root directory of this source tree.
 #include "Common.hh"
 #include "SendPacketEventHandlerData.hh"
 #include "UsageTracker.hh"
+#include "astra-sim/system/prototype/ascend-provider-seam/CollectiveCostModelPrototype.hh"
 #include "astra-sim/system/MockNcclChannel.h"
 #include "astra-sim/system/topology/RingTopology.hh"
 #include "astra-sim/workload/Workload.hh"
@@ -94,6 +95,8 @@ class Sys : public Callable {
   std::vector<int>NVSwitchs; 
   int ngpus_per_node;
   GPUType gpu_type;
+  // PROTOTYPE ONLY: non-owning optional seam. Null preserves the legacy path.
+  CollectiveCostModelPrototype* collective_cost_model_prototype;
 
   std::vector<CollectiveImplementation*>
       all_reduce_implementation_per_dimension;
@@ -246,7 +249,8 @@ class Sys : public Callable {
       GPUType _gpu_type,
       std::vector<int> _all_gpus,
       std::vector<int> _NVSwitchs,
-      int _ngpus_per_node);
+      int _ngpus_per_node,
+      CollectiveCostModelPrototype* _collective_cost_model_prototype = nullptr);
 
   void iterate();
   bool initialize_sys(std::string name);
