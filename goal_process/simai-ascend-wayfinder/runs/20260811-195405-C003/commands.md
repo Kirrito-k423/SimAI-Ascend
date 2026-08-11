@@ -10,3 +10,4 @@
 - 官方来源核验：HCCL Test/C API、CANN Runtime `aclrtGetMemInfo`、HCCL 算法说明、Ascend 950DT 白皮书与 MindSpeed 26.1；950DT 白皮书内容 SHA-256 为 `ece3405e6a17fabdd462338fb94266558649a6407a2f28008403211387b3a927`。
 - 机器可读校验：逐个抽取 Markdown 中的 YAML fenced block，以 Ruby YAML parser 加载；检查 unknown/value、evidenceRef、HBM scope、A2AV artifact 和当前无真机 A5 的 MEASURED 禁止规则。
 - 收口校验：唯一外链状态、相对链接、Markdown fence、敏感字段、`git diff --check` 与 Git 工作区范围；公开 artifact 只包含脱敏示例。
+- GitHub 长 Markdown 正文必须以 shell 单引号或等价的无解释输入传递；禁止把含反引号的正文放进双引号参数。地图回写后断言真实换行、固定 upstream pin、`/to-spec`、新增决策和已删除迷雾项。

@@ -27,7 +27,7 @@
 ## 结果
 
 - **观察事实：** Upstream SimAI 的设备枚举仍是 NVIDIA-only；未知 GPU 会落到 NONE。legacy busbw 表存在 16-node 默认列、空 cell=`1`、单位 1024³ 与 GB/s 文案不一致、部分 rank/消息范围硬编码等行为。HCCL Test/C API 能提供时间、算法带宽、count 语义和 collective 类型，但这些原生字段不能替代物理链路带宽。A2AV exact traffic 在大 rank 下天然是 O(P²)。
-- **错误签名：** 过程偏差为 `/research` 子任务超过预注册 75 分钟上限，主线程中断等待并要求以当时证据立即落盘；首次本地 YAML 校验因系统 Ruby 默认 `US-ASCII` 和 `Time` safe-load 白名单失败，显式指定 UTF-8 并允许标准 `Time` 类型后 7/7 通过，artifact 无需改写。
+- **错误签名：** 过程偏差为 `/research` 子任务超过预注册 75 分钟上限，主线程中断等待并要求以当时证据立即落盘；首次本地 YAML 校验因系统 Ruby 默认 `US-ASCII` 和 `Time` safe-load 白名单失败，显式指定 UTF-8 并允许标准 `Time` 类型后 7/7 通过，artifact 无需改写；父地图首次回写用 shell 双引号承载 Markdown，反引号被错误执行且换行被转义，发现后立即以单引号安全参数完整恢复，并逐项断言真实换行、upstream pin、`/to-spec`、本次决策和已移除未知项。
 - **推断：** 单一 busbw 标量无法同时保真表达设备事实、原始观测、拟合与跨代外推；三层资源和显式 domain 是满足可复核、30% 门槛与 100k 可扩展性的最小边界。A5 当前只能是厂商规格、用户输入或显式外推，不能伪装为现场实测。
 - **证据等级变化：** H-05 E0→E1/SUPPORTED；H-06 E0→E1/SUPPORTED。
 - **信息增量：** 冻结 3 个 apiVersion、6 类 evidence class、4 类 readiness、规范单位、HBM scope、AR/AG/RS/A2A/A2AV raw schema、分段 αβγ fit、A2AV artifact 摘要、validator invariants、legacy adapter 和 A2/A3/A5 脱敏骨架。

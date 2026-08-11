@@ -1,7 +1,7 @@
 # 当前状态
 
 - **Goal：** simai-ascend-wayfinder
-- **更新时间：** 2026-08-11T22:16:21+08:00
+- **更新时间：** 2026-08-11T22:37:58+08:00
 - **状态：** 绿
 - **阶段：** INTEGRATE
 - **截止时间：** 未设定
@@ -19,7 +19,7 @@
 
 ## 交付状态
 
-- **代码：** 本轮不改仿真代码；schema 决策包待本轮提交并推送至 `origin/main`。
+- **代码：** 本轮不改仿真代码；schema 决策包提交 `56f2d39d0ec3aa25b29fa5c37e6ee84a42fba25c` 已推送至 `origin/main`。
 - **文档：** 研究证据库、CONTEXT、ADR、A2/A3 能力矩阵、Ground Truth 栈与 Ascend schema 决策包已形成。
 - **复现：** 只发布脱敏探测命令模板，不发布地址和认证信息。
 - **日志与报告：** `goal_process/simai-ascend-wayfinder/`。
