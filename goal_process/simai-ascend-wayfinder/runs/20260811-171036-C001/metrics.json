@@ -1,0 +1,144 @@
+{
+  "schema_version": "1.0",
+  "captured_at": "2026-08-11T17:18:53+08:00",
+  "probe_policy": {
+    "mode": "read_only",
+    "connection_attempts_per_target": 1,
+    "connect_timeout_seconds": 8,
+    "remote_command_timeout_seconds": 20,
+    "raw_remote_logs_published": false,
+    "identifiers_published": false
+  },
+  "acceptance": {
+    "a2_success_count": 2,
+    "a3_success_count": 1,
+    "ac_02": "PASS"
+  },
+  "machines": [
+    {
+      "alias": "A2-calibration-1",
+      "role": "primary_calibration",
+      "ssh_probe": "success",
+      "architecture": "aarch64",
+      "os": "openEuler 22.03",
+      "npu": {
+        "reported_model": "910B2",
+        "logical_devices": 8,
+        "chips": 8,
+        "hbm_mib_per_chip": 65536,
+        "idle_chips": 8
+      },
+      "memory_total_bytes": 2158576111616,
+      "disk_total_kib": 3684956448,
+      "disk_available_kib": 1032193964,
+      "driver_version": "25.3.rc1",
+      "active_cann_version": "8.5.0",
+      "runtime_snapshot": {
+        "python": "3.13.11",
+        "gcc": "10.3.1",
+        "cmake": "3.22.0",
+        "torch": "2.11.0",
+        "torch_npu": "2.10.0",
+        "megatron_core": "0.16.0",
+        "transformers": "5.2.0",
+        "numpy": "2.5.0"
+      },
+      "tools": {
+        "hccn_tool": true,
+        "msprof": true,
+        "hccl_test": false,
+        "torchrun": true,
+        "mpirun": false
+      }
+    },
+    {
+      "alias": "A3-validation-1",
+      "role": "held_out_cross_generation_validation",
+      "ssh_probe": "success",
+      "architecture": "x86_64",
+      "os": "Ubuntu 22.04",
+      "npu": {
+        "reported_board_name": "9382",
+        "reported_chip_name": "Ascend910",
+        "reported_chip_version": "V1",
+        "logical_devices": 8,
+        "chips_per_logical_device": 2,
+        "chips": 16,
+        "hbm_mib_per_chip": 65536,
+        "idle_chips": 16,
+        "marketed_sku": null
+      },
+      "memory_total_bytes": 1217074151424,
+      "disk_total_kib": 3688136112,
+      "disk_available_kib": 473505488,
+      "driver_version": "26.0.rc1",
+      "active_cann_version": "9.1.0-beta.1",
+      "runtime_snapshot": {
+        "python": "3.10.12",
+        "gcc": "11.4.0",
+        "cmake": "3.22.1",
+        "torch": "2.13.0",
+        "torch_npu": "2.7.1.post6.dev20260722",
+        "deepspeed": "0.19.4",
+        "megatron_energon": "7.4.0",
+        "transformers": "5.9.0",
+        "numpy": "2.2.6"
+      },
+      "tools": {
+        "hccn_tool": true,
+        "msprof": false,
+        "hccl_test": false,
+        "torchrun": true,
+        "mpirun": false
+      }
+    },
+    {
+      "alias": "A2-calibration-2",
+      "role": "backup_only",
+      "ssh_probe": "success",
+      "architecture": "aarch64",
+      "os": "Ubuntu 22.04",
+      "npu": {
+        "reported_model": "910B3",
+        "logical_devices": 8,
+        "chips": 8,
+        "hbm_mib_per_chip": 65536,
+        "idle_chips": 2,
+        "occupied_chips": 6,
+        "occupancy_class": "inference_workload"
+      },
+      "memory_total_bytes": 2159924084736,
+      "disk_total_kib": 102626232,
+      "disk_available_kib": 38583004,
+      "driver_version": "26.0.rc1",
+      "active_cann_version": null,
+      "runtime_snapshot": {
+        "python": "3.10.12",
+        "gcc": "11.4.0",
+        "cmake": "3.22.1",
+        "numpy": "2.2.6"
+      },
+      "tools": {
+        "hccn_tool": true,
+        "msprof": false,
+        "hccl_test": false,
+        "torchrun": false,
+        "mpirun": false
+      }
+    }
+  ],
+  "compatibility_assessment": {
+    "shared_pytorch_ascend_family": true,
+    "common_runnable_environment_validated": false,
+    "distributed_training_validated": false,
+    "hccl_benchmark_available_in_path": false,
+    "next_test": "Validate imports, device enumeration, one operator, then a minimal DeepSeek MoE slice in isolated A2 and A3 environments."
+  },
+  "local_probe_correction": {
+    "first_attempt_reached_remote": false,
+    "error_class": "CommandNotFound",
+    "error_signature": "local timeout wrapper unavailable; exit 127",
+    "correction": "Removed the unavailable local wrapper; retained SSH and remote command time bounds.",
+    "retry_outcome": "success"
+  }
+}
