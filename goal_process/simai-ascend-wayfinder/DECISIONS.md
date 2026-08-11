@@ -59,3 +59,33 @@
 - **决定者：** 基于 Upstream 源码审计的工程决策
 - **影响：** 进入 SimAI 前必须补齐 schema v2、backward MoE 回归与真实路由分布；禁用 CUDA-only AIOB 路径。
 - **回滚条件：** 仅当上游提供并经现场验证的 Ascend physical applyer 与完整 schema 时重新评估。
+
+## D-007：Profile、RawObservation 与 CostModel 三层独立版本化
+
+- **时间：** 2026-08-11
+- **背景证据：** `docs/research/2026-08-11-ascend-profile-hccl-schema.md`；固定 Upstream SimAI、HCCL Test/C API、CANN Runtime 与 Ascend 官方资料
+- **选项：** 单一大 YAML / Profile 加内嵌曲线 / 三层独立资源
+- **决定：** 使用 `simai.ascend.profile/v1alpha1`、`simai.ascend.observation/v1alpha1`、`simai.ascend.costmodel/v1alpha1` 三种可独立版本化、哈希和复核的资源；规范单位统一为 B、B/s、FLOP/s、ns。
+- **决定者：** 基于原生接口与消费边界的工程决策
+- **影响：** 硬件/软件/拓扑事实、不可变原始观测与派生拟合互不覆盖；每个量值保留 evidence class，且与现场 readiness 正交。
+- **回滚条件：** 若 Provider seam 证明三种资源无法独立加载，优先增加 manifest 引用层，不把 raw 与 fit 合并。
+
+## D-008：HCCL 成本只在精确 domain 内拟合，外推与 overlap 独立建模
+
+- **时间：** 2026-08-11
+- **背景证据：** HCCL Test 原生输出、HCCL C API count 语义、Upstream SimAI collective/overlap 源码审计
+- **选项：** 单一 busbw 标量 / 只保留 derived 曲线 / raw-first 精确 domain 模型
+- **决定：** 保留 AR/AG/RS/A2A/A2AV 的原始时间、原生算法带宽、消息语义、rank/topology/software fingerprint 和统计量；只在完全匹配 domain 内插值，跨 rank、拓扑、软件代际或 traffic pattern 必须生成带区间的 `EXTRAPOLATED` 模型；overlap 使用独立 L3 模型。
+- **决定者：** 基于可校准性和 30% Accuracy Gate 的工程决策
+- **影响：** A2AV exact counts 使用外部 artifact/hash 与摘要，避免把 O(P²) 矩阵内嵌进 schema；算法带宽不得冒充物理链路带宽。
+- **回滚条件：** 只有真实目标 workload 证明更低维模型在留出域持续满足误差门槛，才允许添加经验证的简化视图，原始观测仍不删除。
+
+## D-009：Ascend 输入显式选择，legacy GPU/NCCL 由 fail-closed adapter 隔离
+
+- **时间：** 2026-08-11
+- **背景证据：** Upstream SimAI `Common.hh`、`AstraParamParse.hh`、`calbusbw.cc`、`Layer.cc` 与 legacy CSV 行为
+- **选项：** 复用并扩展 legacy CSV / 静默推断设备 / 显式 Ascend profile 加隔离 adapter
+- **决定：** Ascend 路径必须显式传入 `--device-profile`；与 legacy GPU 参数冲突时失败。legacy 空格、未知 rank/default column、超域和单位歧义由独立 adapter 标为 `LEGACY_ASSUMED` 或失败，不改变现有 GPU/NCCL 路径。
+- **决定者：** 基于向后兼容与错误可见性的工程决策
+- **影响：** 不再让未知 Ascend 设备落到 NVIDIA/NONE 默认值，也不把 legacy 1/16-node 表静默用于 100k 域。
+- **回滚条件：** 不回滚 fail-closed 原则；若 upstream 提供正式 provider ABI，则 adapter 迁移到 ABI 边界。
