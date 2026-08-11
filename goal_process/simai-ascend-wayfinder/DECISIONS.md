@@ -29,3 +29,33 @@
 - **决定者：** 基于现场证据的工程决策
 - **影响：** 先消除 A2 workload/采集问题，再在 A3 检验跨代迁移，避免首轮同时改变环境与设备代际。
 - **回滚条件：** 首选机器不可用，或备份机释放资源并证明软件栈更适合目标 workload。
+
+## D-004：共同源码契约、A2/A3 独立低层环境
+
+- **时间：** 2026-08-11
+- **背景证据：** `docs/research/2026-08-11-a2-a3-ground-truth-stack.md`；MindSpeed-LLM 26.1 官方配套与兼容表
+- **选项：** 强求同一 wheel/toolkit / 固定同一源码与指标但按代际锁定兼容环境 / 两代完全不同训练栈
+- **决定：** 两 lane 固定 MindSpeed-LLM 26.1、MindSpeed Core 26.1、Megatron `core_v0.12.1`、Python 3.10、PyTorch 2.7.1；A2 使用 TorchNPU 7.3.0+CANN 8.5，A3 使用 TorchNPU 26.1.0+CANN 9.1。
+- **决定者：** 基于官方兼容矩阵的工程决策
+- **影响：** 两代不共享 wheel、toolkit 或容器；现场全局包不进入 Ground Truth；A3 只在 A2 manifest 冻结后重放。
+- **回滚条件：** A2 的 26.1 共同源码未通过 L0 时，仅 A2 回退到官方 2.3.0/CANN 8.5 商用栈，并把训练栈版本显式作为解释变量。
+
+## D-005：官方 DeepSeek ST bootstrap 加目标语义 slice
+
+- **时间：** 2026-08-11
+- **背景证据：** MindSpeed-LLM 26.1 固定提交内的 8 NPU DeepSeek-V3 ST 脚本与 JSON 基线
+- **选项：** 直接运行 2048 experts/TopK16 / 只跑微算子 / 先复现官方缩小基线再单变量推进目标语义
+- **决定：** 先用官方 8 NPU、TP1/PP2/EP4、16E/TopK8、两个 active layer 的 ST shape 打通；随后推进至 4 active layers、32E/TopK16、expert width 3072、1 shared expert、MTP1、seq2048、GBS8 的 `GT-TARGET-SEMANTIC-v1`。
+- **决定者：** 基于可复现性与目标语义覆盖的工程决策
+- **影响：** slice 的 GTS 为 16,384，满足每 step≤500M；它不是 10T 模型，只校准结构同态的计算、路由、通信、显存和 step 契约。
+- **回滚条件：** 任一 L0/L1/L2/L3 门禁失败即停止；不得同时改变软件版本和 shape。
+
+## D-006：AICB 只做 workload 契约，Ground Truth 来自真实 Ascend 栈
+
+- **时间：** 2026-08-11
+- **背景证据：** Upstream AICB 固定提交中的 NCCL/CUDA applyer、AIOB/DeepGEMM 限制、MoE backward 与 dump schema 缺口
+- **选项：** 直接把 AICB 当 Ascend 执行器 / 只把它作为 SimAI workload bridge
+- **决定：** AICB 只生成并承载 SimAI workload/消息契约；计算时间、显存、路由直方图和 HCCL 曲线必须来自 MindSpeed Ground Truth 与 HCCL Test。
+- **决定者：** 基于 Upstream 源码审计的工程决策
+- **影响：** 进入 SimAI 前必须补齐 schema v2、backward MoE 回归与真实路由分布；禁用 CUDA-only AIOB 路径。
+- **回滚条件：** 仅当上游提供并经现场验证的 Ascend physical applyer 与完整 schema 时重新评估。

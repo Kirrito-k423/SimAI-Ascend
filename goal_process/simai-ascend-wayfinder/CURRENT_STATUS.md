@@ -1,7 +1,7 @@
 # 当前状态
 
 - **Goal：** simai-ascend-wayfinder
-- **更新时间：** 2026-08-11T17:27:34+08:00
+- **更新时间：** 2026-08-11T19:30:59+08:00
 - **状态：** 绿
 - **阶段：** RECON
 - **截止时间：** 未设定
@@ -10,11 +10,11 @@
 ## 一分钟摘要
 
 - **目标：** 关闭 Wayfinder 地图全部必要决策并形成 `/to-spec` 输入。
-- **已完成：** Upstream 基线已推送；两台 A2 与一台 A3 已完成有界只读盘点并形成公开脱敏矩阵。
-- **当前主阻塞：** A2/A3 仅有全局包快照，尚未证明共同 Ground Truth 训练栈可运行。
-- **关键证据：** `docs/research/2026-08-11-a2-a3-capability-matrix.md`；run C001 `metrics.json`。
+- **已完成：** Upstream 基线、A2/A3 脱敏盘点，以及 Ground Truth 共同源码/双 lane 版本契约和最小 DeepSeek MoE slice 已形成。
+- **当前主阻塞：** 尚未定义可直接承接 L1/L2/L3 实测数据的 Ascend Hardware Profile、显存与 HCCL Cost Model schema。
+- **关键证据：** `docs/research/2026-08-11-a2-a3-ground-truth-stack.md`；run C002；Ground Truth 研究票。
 - **已解决：** AC-02 通过；首选 A2 校准机、A3 留出验证机和 A2 备份机角色已明确。
-- **下一步：** 下一会话处理“选择 A2/A3 Ground Truth 训练栈与最小 DeepSeek MoE Slice”；本会话到当前票关闭即停止。
+- **下一步：** 进入“定义证据化 Ascend Hardware Profile 与 HCCL Cost Model Schema”研究票；本轮不启动下一票。
 - **需要决策：** 无。
 
 ## 交付状态
@@ -27,16 +27,16 @@
 ## 时间与预算
 
 - **环境：** 3 台可达机器完成只读盘点：A2×2、A3×1。
-- **调研：** 待统计
+- **调研：** C002 已收敛：同一 MindSpeed-LLM 26.1 源码、A2/A3 独立兼容环境、官方 DeepSeek ST bootstrap、目标语义 slice 和 HCCL Test 组合 harness。
 - **实现：** 不适用
 - **实验：** 仅环境 probe；未运行训练或性能测试。
 - **文档与交付：** 1 份公开矩阵、1 份结构化指标、Goal 账本更新。
-- **资源等待：** 待统计
+- **资源等待：** 无；本轮只读研究，未占用远端算力。
 - **剩余预算：** 未设置 token、时间、算力或重试预算；后续实验继续执行有界停止规则。
 - **费用报告：** 用户明确要求本项目不启用费用监控；不更新 `RMB-Cost.md`。
 
 ## 条件化 ETA
 
-- **路径 A：** 下一票先研究官方支持矩阵与现有 workload，再选择最小可运行 slice，避免在远端盲装。
-- **路径 B：** 若 A2/A3 不能共享同一二进制环境，固定两个代际独立环境并统一 workload 与指标口径。
-- **最晚决策点：** 已按 Wayfinder 一票一会话停止；下一票必须新会话认领后执行。
+- **路径 A：** Hardware Profile/HCCL schema 能完整承接 L1/L2/L3 字段后，才允许后续 A2 L0 安装与 ABI 验证。
+- **路径 B：** 若具体 driver/toolkit/build 不通过 L0，停止在环境门禁并保留 `FIELD_UNVERIFIED`，不直接运行目标 slice。
+- **最晚决策点：** schema 未冻结前不开始远端实测，避免采到无法进入 SimAI 的一次性指标。
