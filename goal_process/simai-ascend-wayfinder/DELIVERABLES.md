@@ -9,3 +9,4 @@
 | D-05 | `/to-spec` 输入 | GitHub map + linked assets | NOT_STARTED | 待地图闭合 |
 | D-06 | A2/A3 Ground Truth 栈与最小 DeepSeek MoE slice 决策包 | `docs/research/2026-08-11-a2-a3-ground-truth-stack.md` | DELIVERED | run C002；Ground Truth 研究票；官方固定提交与 L0–L3 契约 |
 | D-07 | Ascend Hardware Profile 与 HCCL Cost Model Schema 决策包 | `docs/research/2026-08-11-ascend-profile-hccl-schema.md` | DELIVERED | run C003；Hardware Profile/HCCL Schema 研究票；三层资源与机器校验契约 |
+| D-08 | Ascend Provider seam throwaway logic prototype | `prototype/ascend-provider-seam` 分支 + Provider seam 原型票 | WIP | run C004；待一命令 TUI、构建证据与用户 HITL 评判 |
