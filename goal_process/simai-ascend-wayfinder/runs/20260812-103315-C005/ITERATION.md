@@ -1,7 +1,7 @@
 # C005：闭合 10T-scale Workload Schema 与参数及激活计数
 
-- **开始/结束：** 2026-08-12T10:33:15+08:00 / 进行中
-- **阶段：** RECON → HYPOTHESIS → PROBE
+- **开始/结束：** 2026-08-12T10:33:15+08:00 / 2026-08-12T10:54:34+08:00
+- **阶段：** RECON → HYPOTHESIS → PROBE → READY_FOR_HITL
 - **动作类型：** PROBE
 - **关联验收/未知量：** AC-04、H-10、H-11、H-12、D-09
 
@@ -20,21 +20,21 @@
 ## 执行
 
 - **脱敏命令：** `commands.md`
-- **配置/环境差异：** 待记录。
-- **代码差异：** 待原型分支提交。
-- **日志/指标：** 待记录。
+- **配置/环境差异：** 本地 Python 标准库；无远端/NPU；只用 HTTP Range 读取固定官方 checkpoint JSON header，并对忽略 Range 或异常 header size 的响应立即失败。
+- **代码差异：** throwaway 分支新增 `prototypes/target_10t_workload_contract/` 和一命令启动脚本；未修改 Upstream AICB 子模块或 production SimAI 路径。
+- **日志/指标：** `metrics.json`；7 个 scripted scenarios；64 shard、145,116 tensor 逐项 shape/dtype 对账。
 
 ## 结果
 
-- **观察事实：** 官方 checkpoint header 共 145,116 tensors、864,704,792,696 storage bytes；expert FP4 权重以 packed I8 shape 存储，每个 storage element 表示 2 个 logical parameters，另有独立量化 scale 与 hash routing table。
+- **观察事实：** 官方 checkpoint header 共 145,116 tensors、864,704,792,696 storage bytes；generator 对名称、dtype、storage shape 做全量对账，missing/extra/mismatch 均为 0。expert FP4 权重以 packed I8 shape 存储，每个 storage element 表示 2 个 logical parameters，另有独立量化 scale 与 hash routing table。
 - **错误签名：** 无。
-- **推断：** logical parameters、active logical parameters、checkpoint auxiliary/storage 与训练显存必须独立计数。
-- **证据等级变化：** H-10～H-12 保持 E1，待可运行原型。
-- **信息增量：** 基于完整官方 headers 的初步精确推导：baseline 1,598,837,347,742 logical params；若 61 主干和 1 MTP block 全部扩展，target 为 8,414,884,746,526 logical params、92,345,423,134 active logical params/token；结果待原型独立复核。
+- **推断：** logical parameters、带 scope 的 active logical parameters、checkpoint auxiliary/storage、训练显存和 token accounting 必须独立计数；模型错误与 step 错误也必须正交，否则 501M GTS 会错误抹去模型身份。
+- **证据等级变化：** H-10～H-12 由 E1 升至 E2，技术 probe 支持，等待用户 HITL 后才标 SUPPORTED。
+- **信息增量：** baseline 精确为 1,598,837,347,742 logical params；61 主干和 1 MTP block 使用全局 E=2048/K=16 后，target 精确为 8,414,884,746,526 logical params；独立算术与逐 tensor 枚举一致。active 分别为主干 blocks 88,950,053,982、含 IO 的 main forward 90,803,533,923、含 MTP 的 training graph 92,345,423,134。
 
 ## 结论
 
-- **验收/交付更新：** D-09 WIP；AC-04 仍 IN_PROGRESS。
+- **验收/交付更新：** D-09 READY_FOR_HITL；AC-04 仍 IN_PROGRESS（本票不包含 AlltoAll 与 Accuracy Gate）。
 - **预算变化：** 用户已明确关闭费用监控；本轮不使用远端算力。
-- **下一 micro-goal：** 固化 compact tensor templates 并实现一命令 TUI/批量场景。
-- **是否需决策：** 原型完成后以不超过 5 项交给用户 HITL 评判。
+- **下一 micro-goal：** 用户评判 5 项 contract 决策；接受后只把 ADR/账本结论合入 `main`，删除 production 设计中的 TUI、fixture action 和 `PROTOTYPE_*` 引用。
+- **是否需决策：** 是；5 项，见本轮 HITL 请求。
