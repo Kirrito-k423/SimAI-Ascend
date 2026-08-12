@@ -3,7 +3,7 @@
 - **Goal：** simai-ascend-wayfinder
 - **更新时间：** 2026-08-12T10:16:16+08:00
 - **状态：** 绿
-- **阶段：** INTEGRATE
+- **阶段：** RECON
 - **截止时间：** 未设定
 - **验收进度：** 3/6
 
@@ -14,7 +14,7 @@
 - **当前主阻塞：** 无；本轮只收口 Provider seam，下一 frontier 需在新 Wayfinder 会话认领。
 - **关键证据：** run C004 的 6/6 resolver 场景、Analytical 完整链接、Simulation 核心目标编译、prototype `3f31ca1` 与用户 HITL 全部接受。
 - **已解决：** Analytical cost 与 Simulation flow 分离；null 保持 legacy；profile/GPU 冲突 fail-closed；prototype 试验元素不合入 `main`。
-- **下一步：** 下一 frontier 首票为“定义 A5 Estimated Profile 输入与敏感性协议”，另一个并列 frontier 是“闭合 10T-scale Workload Schema 与参数及激活计数”。
+- **下一步：** GitHub 原生子票顺序中的首个未认领 frontier 是“闭合 10T-scale Workload Schema 与参数及激活计数”；另有“A5 Estimated Profile 输入与敏感性协议”和“Simulation smoke test 最小拓扑与验收”已解锁。
 - **需要决策：** 无。
 
 ## 交付状态
@@ -37,6 +37,6 @@
 
 ## 条件化 ETA
 
-- **路径 A：** 先处理 A5 Estimated Profile 输入协议，可直接消费已冻结的三层 schema，当前证据 E1。
-- **路径 B：** 先处理 10T-scale Workload Schema，可解锁 AlltoAll、Accuracy Gate 与拓扑搜索，当前证据 E1。
+- **路径 A：** 按子票顺序先处理 10T-scale Workload Schema，可解锁 AlltoAll、Accuracy Gate 与拓扑搜索，当前证据 E1。
+- **路径 B：** 若该票已被并发认领，则处理 A5 Estimated Profile 输入协议或 Simulation smoke，当前证据 E1。
 - **最晚决策点：** 新会话按原生依赖和 issue 顺序认领第一个未认领 frontier，不在本轮解决第二票。
