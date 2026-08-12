@@ -1,0 +1,68 @@
+{
+  "run_id": "20260812-112946-C006",
+  "prototype_branch": "prototype/hierarchical-a2a-projection",
+  "prototype_commit": "691346f2ead8ad865a094b4430f9b1db8a05972f",
+  "upstream_source": {
+    "simai_base_commit": "f5efb5a93ea9be7db25a8843f9f7ff54044f6062",
+    "flow_generator_commit": "a920cdc2b396537822191d5e5a7735058ec0f56a",
+    "mock_nccl_group_sha256": "8a80e2e89b30b54d25150399bf15ea3bd726ad45e7af0d012777692f3b2a1f4b",
+    "sys_sha256": "01e294e34f5a07c0fe129a9df45fc82bd3a079e9344833286a488b4e9c4e0d1b",
+    "nccl_tree_flow_model_sha256": "9d05fe12b7992a12aa7bd7adc1e04b68eb4f8e7f8546584d34bbd861db157954"
+  },
+  "upstream_cpp_probe_p4": {
+    "status": "PASS",
+    "unique_directed_flows": 12,
+    "rank_zero_view_entries": 6,
+    "duplicated_rank_view_entries": 24,
+    "unique_prev_integer_references": 36,
+    "input_data_size_bytes_per_rank": 4096,
+    "pair_flow_size_bytes": 1024,
+    "network_bytes": 12288
+  },
+  "conservation": {
+    "scenarios": ["uniform", "hotspot", "locality", "ragged"],
+    "hierarchical_projection_all_invariants": "4/4",
+    "invariants": [
+      "total_bytes",
+      "rank_egress",
+      "rank_ingress",
+      "domain_pair_bytes",
+      "resource_load",
+      "synthetic_bottleneck_units"
+    ],
+    "uniform_formula_matches_exact": true,
+    "symmetry_fold_general": false,
+    "representative_flow_general": false
+  },
+  "scale": {
+    "ep2048_two_1024_domains": {
+      "exact_directed_flow_objects": 4192256,
+      "upstream_rank_view_entries": 8384512,
+      "upstream_prev_integer_references": 8581548032,
+      "hierarchical_total_summary_cells": 8200,
+      "uniform_formula_pair_enumeration": false
+    },
+    "target100k_ragged_98_domains": {
+      "exact_directed_flow_objects": 9999900000,
+      "upstream_rank_view_entries": 19999800000,
+      "upstream_prev_integer_references": 999980000100000,
+      "hierarchical_total_summary_cells": 419208,
+      "uniform_formula_pair_enumeration": false
+    }
+  },
+  "complexity_boundary": {
+    "uniform_formula_time_and_state": "O(P + D^2 + R)",
+    "arbitrary_dense_a2av_streaming_state": "O(P + D^2 + R)",
+    "arbitrary_dense_a2av_input_read_time": "O(P^2)",
+    "lossless_subquadratic_arbitrary_matrix_claimed": false
+  },
+  "fail_closed": {
+    "missing_routing": "UNKNOWN_ROUTING_COUNTS",
+    "missing_topology": "TRAFFIC_ONLY_TOPOLOGY_UNKNOWN",
+    "missing_cost_model": "RESOURCE_LOAD_PROJECTED_COST_MODEL_UNKNOWN",
+    "simulation": "UNSUPPORTED_AGGREGATE_IS_NOT_A_FLOW_PROVIDER"
+  },
+  "performance_data": false,
+  "remote_or_npu_used": false,
+  "user_hitl": "PENDING"
+}
