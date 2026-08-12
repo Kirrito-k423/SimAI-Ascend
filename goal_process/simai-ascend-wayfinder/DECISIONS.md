@@ -139,3 +139,13 @@
 - **决定者：** 用户完成 grilling HITL 后全部接受 5 项决策
 - **影响：** 缺 HBM/compute/link/cost/transfer 时逐消费点 fail-closed；物理链路只能给 load 不能给 HCCL 时间；搜索分别输出三个情景 Top-5，三情景均可行且均在 Top-5 才标 Robust A5 Candidate，并报告 rank reversal 与主导敏感字段。
 - **回滚条件：** 有 A5 真机后新增 immutable RawObservation 与 DerivedCostModel，不把旧情景原地升级成 MEASURED；目标 SKU/BOM、软件、拓扑或跨代迁移证据改变时重建包络。
+
+## D-015：100k 搜索分离拓扑身份并采用 folded parallel placement
+
+- **时间：** 2026-08-12
+- **背景证据：** `docs/research/2026-08-11-simai-ascend-evidence.md`；ADR-0007/0009；run C009；`docs/adr/0010-separate-100k-topology-identities-and-folded-placement.md`
+- **选项：** 单一扁平 100k 拓扑 / 将 8192 路线图当当前产品 / 独立拓扑身份加 regular/ragged 资源口径和 folding
+- **决定：** 1,024 current-product 是主搜索，8,192 architecture-limit 是独立敏感性身份，历史路线图不入排名；比较 98,304 active+1,696 spare、精确100,000 ragged、98×1,024 capacity+352 spare。候选证明 attention `N=TP×CP×DP×PP` 与 MoE `N=ETP×EP×EDP×PP`，EP整除2048 experts；exact-100k 只有框架证明 ragged group/shard/optimizer 语义才开放实验 lane。
+- **决定者：** 用户完成 grilling HITL 后全部接受 5 项决策
+- **影响：** 每个合法 grid 生成 flat/topology-aware、global/local EP 等成对 placement；输出 rank/group digest、跨域 bytes、domain matrix、shared load 与 local hit。MBS/GA/recompute 在 `GTS≤500M` 和 `peak HBM≤95%×Scenario Usable HBM Budget` 下按 Useful Throughput 搜索；全部依赖逐项 fail-closed。
+- **回滚条件：** 权威 BOM 改变时重建拓扑身份；训练栈实证支持非均匀 groups 与 ragged optimizer 后重审 exact-100k 可行域；不得为整除混合不同证据身份。

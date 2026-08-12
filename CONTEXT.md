@@ -79,3 +79,19 @@ _Avoid_: Unqualified active parameters, model memory
 **Projected A2A Traffic**:
 A content-addressed Analytical view of AlltoAll or AlltoAllV traffic that preserves total bytes, per-rank send and receive, domain-pair bytes, topology-resource offered load, conservation evidence and readiness without retaining endpoint flow objects.
 _Avoid_: Representative flow, packet flow, measured HCCL performance
+
+**Current-product SuperPod Topology**:
+The 1,024-NPU Atlas 950 product-domain identity used as the primary 100,000-rank search basis, with its own evidence, links, shared resources and cost-model references.
+_Avoid_: 8,192-NPU architecture limit, historical roadmap topology
+
+**Architecture-limit SuperNode Topology**:
+The independent 8,192-NPU architecture-scale sensitivity identity; it does not assert current product availability or inherit current-product performance parameters.
+_Avoid_: Current-product SuperPod, delivered 8,192-NPU system
+
+**Regular 98,304 Active Set**:
+The divisible performance baseline with 98,304 simultaneous training ranks and 1,696 ranks reserved for spare or service capacity in a nominal 100,000-device pool.
+_Avoid_: 100,000 active ranks, exact 100k training
+
+**Exact 100,000 Ragged Set**:
+The topology with exactly 100,000 active ranks and a partially populated final domain; it is executable only when every parallel and optimizer group has supported ragged semantics.
+_Avoid_: Regular Cartesian grid, topology-only feasibility

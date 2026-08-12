@@ -1,0 +1,32 @@
+{
+  "run_id": "20260812-172103-C009",
+  "action": "DECISION",
+  "ticket": "定义 100k SuperPoD 拓扑与并行放置搜索空间",
+  "user_hitl": "ACCEPTED_ALL_FIVE_DECISIONS",
+  "topology_identities": {
+    "primary_current_product_domain_ranks": 1024,
+    "architecture_limit_domain_ranks": 8192,
+    "historical_roadmap_in_current_ranking": false
+  },
+  "resource_scenarios": [
+    {"id": "REGULAR_98304", "active": 98304, "spare_or_service": 1696},
+    {"id": "EXACT_100000_RAGGED", "active": 100000, "spare_or_service": 0},
+    {"id": "PRODUCT_CAPACITY_100352", "active": 100000, "capacity": 100352, "spare": 352}
+  ],
+  "folding": {
+    "attention_identity": "N=TP*CP*DP*PP",
+    "moe_identity": "N=ETP*EP*EDP*PP",
+    "expert_count": 2048,
+    "regular_ep_values": [128, 256, 512, 1024, 2048],
+    "exact100k_power_of_two_factor": 32,
+    "ragged_requires_explicit_framework_support": true
+  },
+  "constraints": {
+    "gts_tokens_per_step_max": 500000000,
+    "peak_hbm_fraction_of_scenario_usable_max": 0.95,
+    "objective": "USEFUL_THROUGHPUT",
+    "fill_memory_is_objective": false
+  },
+  "remote_or_npu_used": false,
+  "performance_data": false
+}

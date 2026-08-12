@@ -14,3 +14,4 @@
 | D-10 | 2048-EP AlltoAll 聚合 seam throwaway prototype | `prototype/hierarchical-a2a-projection` 分支 + AlltoAll seam 原型票 | DELIVERED | `691346f`；run C006；四场景六项守恒 4/4；P=4 Upstream probe；用户全部接受；ADR-0007 |
 | D-11 | A2→A3 Exploration Accuracy Gate 决策契约 | ADR-0008 + Accuracy Gate grilling 票 | DELIVERED | run C007；A2 三校准 case、A3 三严格留出 case、5/10 次统计、逐 case≤30%；用户全部接受 |
 | D-12 | A5 Estimated Profile 与 Sensitivity Envelope 决策契约 | ADR-0009 + A5 Profile grilling 票 | DELIVERED | run C008；必填/条件输入、domain-keyed efficiency、low/nominal/high、局部 fail-closed、稳健 Top-5；用户全部接受 |
+| D-13 | 100k topology 与 folded placement 搜索契约 | ADR-0010 + 100k placement grilling 票 | DELIVERED | run C009；独立拓扑身份、三类 active/capacity 口径、双恒等式、放置对照、GTS/HBM 边界；用户全部接受 |
