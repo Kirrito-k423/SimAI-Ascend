@@ -1,9 +1,9 @@
 # 当前状态
 
 - **Goal：** simai-ascend-wayfinder
-- **更新时间：** 2026-08-12T16:35:04+08:00
+- **更新时间：** 2026-08-12T16:38:16+08:00
 - **状态：** 绿
-- **阶段：** HITL_ACCEPTED
+- **阶段：** FRONTIER_RECORDED
 - **截止时间：** 未设定
 - **验收进度：** 4/6
 
@@ -14,7 +14,7 @@
 - **当前主阻塞：** A5 输入与敏感性协议已关闭；100k topology/placement、Top-5/goodput 与 Simulation smoke 仍有开放票据。
 - **关键证据：** run C008；SKU 分离、必填/条件字段、domain-keyed efficiency、low/nominal/high Sensitivity Envelope、局部 fail-closed 与 Robust A5 Candidate。
 - **已解决：** 无真机 A5 只允许 USER_INPUT/VENDOR_SPEC/EXTRAPOLATED；物理峰值不冒充 HCCL 时间；可用 HBM 可作情景预算但不冒充 allocator 实测；三情景排名不称置信区间。
-- **下一步：** 关闭“定义 A5 Estimated Profile 输入与敏感性协议”并更新地图，再按 GitHub 原生依赖只记录下一 frontier。
+- **下一步：** 下一轮处理“定义 100k SuperPoD 拓扑与并行放置搜索空间”；其 Profile 与 workload 前置均已关闭，当前无 assignee。本轮不认领、不展开第二张票。
 - **需要决策：** 否；本票五项 A5 决策已全部接受。
 
 ## 交付状态
@@ -37,6 +37,6 @@
 
 ## 条件化 ETA
 
-- **路径 A：** 本票关闭后，首个无阻塞、未认领子票据成为下一轮 frontier。
-- **路径 B：** 若新依赖改变 frontier，只记录原生依赖证据，不在本轮解决第二票。
-- **最晚决策点：** 本轮最多关闭当前 A5 Profile 一票。
+- **路径 A：** 下一轮以最多 5 项一批冻结 1024 当前商品/8192 架构情景、98,304 active+spares/100,000 ragged、并行 folding、rank placement 与跨域 AlltoAll 边界。
+- **路径 B：** 不把 8192 架构上限或历史路线图与当前 1024 商品 BOM 混为一个拓扑。
+- **最晚决策点：** 本轮已关闭且只关闭 A5 Profile 一票；下一 frontier 已记录为“定义 100k SuperPoD 拓扑与并行放置搜索空间”。
