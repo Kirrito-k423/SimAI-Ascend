@@ -109,3 +109,13 @@
 - **决定者：** 用户完成 prototype HITL 后全部接受 5 项决策
 - **影响：** 4,486,847,493,752 B 量化 checkpoint storage 不能冒充训练显存；500M GTS 下 496B assignment slots 是 62 个 routed blocks 的配置上界，不是实测路由或网络流量；AICB/SimAI 只通过内容哈希连接四层资源。
 - **回滚条件：** 固定官方模型源、tensor layout、MTP 结构或全局 expert 配置改变时重算精确数字；资源职责分离除非被 production 生命周期证据否定，否则不合并。
+
+## D-012：Analytical AlltoAll 使用分层投影而非常驻 pair flows
+
+- **时间：** 2026-08-12
+- **背景证据：** run C006；`prototype/hierarchical-a2a-projection@691346f`；`docs/adr/0007-use-hierarchical-projection-for-analytical-alltoall.md`
+- **选项：** 显式 pair flows / 对称折叠 / 代表流 / 保留守恒面的分层投影
+- **决定：** Analytical 主表示采用 content-addressed `ProjectedA2ATraffic`，保留总量、逐 rank 收发、域对矩阵、拓扑资源负载和守恒证据；uniform 闭式为 O(P+D²+R)，arbitrary dense A2AV 只承诺同阶常驻状态而读取仍为 O(P²)；routing、topology 或匹配 cost model 缺失时返回不同 UNKNOWN；Simulation 使用独立 HCCL flow provider。
+- **决定者：** 用户完成 prototype HITL 后全部接受 5 项决策
+- **影响：** EP=2048 和 100k Analytical 搜索不再预先生成 O(P²) endpoint flow objects；A2AV 需要带哈希的 immutable counts artifact 或 routing stream；合成 capacity 不得产出 ns 或性能结论；aggregate 不进入 NS-3。
+- **回滚条件：** 实测 HCCL 算法证明当前守恒面缺少必要充分统计时扩展 projection；不回滚 Analytical 与 Simulation 语义隔离。

@@ -47,3 +47,7 @@ _Avoid_: Single model YAML, hardware fields embedded in the model, independent s
 **Scoped Active Parameters**:
 The logical trainable parameters touched by one token within an explicitly named execution scope—main MoE blocks, main forward including input/output, or the training graph including MTP. It is never checkpoint storage or a memory estimate.
 _Avoid_: Unqualified active parameters, model memory
+
+**Projected A2A Traffic**:
+A content-addressed Analytical view of AlltoAll or AlltoAllV traffic that preserves total bytes, per-rank send and receive, domain-pair bytes, topology-resource offered load, conservation evidence and readiness without retaining endpoint flow objects.
+_Avoid_: Representative flow, packet flow, measured HCCL performance
