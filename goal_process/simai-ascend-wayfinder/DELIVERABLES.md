@@ -11,3 +11,4 @@
 | D-07 | Ascend Hardware Profile 与 HCCL Cost Model Schema 决策包 | `docs/research/2026-08-11-ascend-profile-hccl-schema.md` | DELIVERED | run C003；Hardware Profile/HCCL Schema 研究票；三层资源与机器校验契约 |
 | D-08 | Ascend Provider seam throwaway logic prototype | `prototype/ascend-provider-seam` 分支 + Provider seam 原型票 | DELIVERED | `3f31ca1`；6/6 场景、Analytical 链接与 Simulation 核心编译通过；用户 HITL 全部接受；ADR-0005 |
 | D-09 | 10T-scale Workload Schema 与逐 tensor counter throwaway prototype | `prototype/target-10t-workload-contract` 分支 + workload schema 原型票 | DELIVERED | `8195c3c`；run C005；7/7 场景；官方 145,116 tensors 全量对账；用户全部接受；ADR-0006 |
+| D-10 | 2048-EP AlltoAll 聚合 seam throwaway prototype | `prototype/hierarchical-a2a-projection` 分支 + AlltoAll seam 原型票 | WIP | run C006；待四类小规模守恒、2048 表示规模、fail-closed capability 与用户 HITL |
