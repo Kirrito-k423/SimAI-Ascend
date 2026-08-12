@@ -1,9 +1,9 @@
 # 当前状态
 
 - **Goal：** simai-ascend-wayfinder
-- **更新时间：** 2026-08-12T14:40:26+08:00
+- **更新时间：** 2026-08-12T14:44:40+08:00
 - **状态：** 绿
-- **阶段：** FRONTIER_SELECTION
+- **阶段：** FRONTIER_RECORDED
 - **截止时间：** 未设定
 - **验收进度：** 3/6
 
@@ -14,7 +14,7 @@
 - **当前主阻塞：** 10T-scale workload 与 2048-EP AlltoAll 已关闭；30% A2→A3 Accuracy Gate 仍未定义，因而还不能证明校准流程达到学习阶段门槛。
 - **关键证据：** run C006；真实 Upstream P=4 flow probe；hierarchical projection 四场景六项守恒 4/4；uniform 闭式 2048/100k 不枚举 pairs；三类缺失输入 fail-closed。
 - **已解决：** Analytical AlltoAll 使用 `ProjectedA2ATraffic`；uniform 闭式与 arbitrary A2AV 复杂度边界明确；缺 routing/topology/cost fail-closed；Simulation flow provider 独立；prototype 试验元素不合入 `main`。
-- **下一步：** 关闭当前 HITL 票并依据 GitHub 原生依赖选择下一个 frontier，本轮不继续解决第二张票。
+- **下一步：** 下一轮处理 GitHub #13“定义 A2→A3 Exploration Accuracy Gate 的留出集”；它的 #2、#3、#8 前置均已关闭，当前无 assignee。本轮不认领、不展开第二张票。
 - **需要决策：** 否；当前五项 AlltoAll 决策已全部接受。
 
 ## 交付状态
@@ -37,6 +37,6 @@
 
 ## 条件化 ETA
 
-- **路径 A：** 关闭 AlltoAll 票后，首个无阻塞 frontier 进入下一轮 Wayfinder。
-- **路径 B：** 若原生依赖仍有缺口，只记录阻塞证据并选择下一个无阻塞 frontier。
-- **最晚决策点：** 本轮最多关闭当前一张票；只记录下一 frontier，不展开其决策。
+- **路径 A：** 下一轮认领 #13，以不超过 5 个问题一批的 HITL 方式冻结 A2 校准集、A3 留出集、统计口径和 30% 判据。
+- **路径 B：** 若 #13 开始前现场证据变化，先更新其输入证据，但不把 A3 留出数据泄漏进 A2 拟合。
+- **最晚决策点：** 本轮已关闭且只关闭 #11；下一 frontier 已记录为 #13。
