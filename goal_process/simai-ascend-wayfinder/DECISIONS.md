@@ -129,3 +129,13 @@
 - **决定者：** 用户完成 grilling HITL 后全部接受 5 项决策
 - **影响：** A3 L0 readiness 不算揭盲，但任何性能字段揭盲后不得回用于首次 Gate；OOM/HBM≥85%、rank/token/finite/provenance 问题是 `INVALID_EXECUTION` 并不通过，ABI/HCCL 建域问题是 `BLOCKED_ENVIRONMENT` 且不产生精度结论；修改预测器后只能使用预注册的新 seed/message 进行第二轮复验。
 - **回滚条件：** A3 无法形成 16 个稳定训练 rank 或固定 slice 对两代均无效时重选 case；不得因结果失败而放宽严格留出或逐 case 30% 规则。
+
+## D-014：A5 输出使用敏感性包络而非校准或置信区间
+
+- **时间：** 2026-08-12
+- **背景证据：** `docs/research/2026-08-11-ascend-profile-hccl-schema.md`；950DT 官方白皮书；run C008；`docs/adr/0009-treat-a5-as-sensitivity-envelope-not-calibration.md`
+- **选项：** 按 TFLOPS 直接缩放 A2/A3 step time / 只取厂商峰值 / SKU 物理输入加 domain-keyed efficiency 情景
+- **决定：** A5 必须选择 SKU 或分别保留 SKU 情景，并提供 rank、dtype算力、HBM/带宽、scenario usable budget、使用到的链路/共享资源与 provenance；H2D/D2H 等按消费点条件必填。A2/A3 只迁移分域无量纲效率并标 EXTRAPOLATED+FIELD_UNVERIFIED；同域样本≥5 时 low/nominal/high 用 type7 P10/P50/P90，少于5个则用户显式给值或 UNKNOWN；三者组成非概率 Sensitivity Envelope。
+- **决定者：** 用户完成 grilling HITL 后全部接受 5 项决策
+- **影响：** 缺 HBM/compute/link/cost/transfer 时逐消费点 fail-closed；物理链路只能给 load 不能给 HCCL 时间；搜索分别输出三个情景 Top-5，三情景均可行且均在 Top-5 才标 Robust A5 Candidate，并报告 rank reversal 与主导敏感字段。
+- **回滚条件：** 有 A5 真机后新增 immutable RawObservation 与 DerivedCostModel，不把旧情景原地升级成 MEASURED；目标 SKU/BOM、软件、拓扑或跨代迁移证据改变时重建包络。

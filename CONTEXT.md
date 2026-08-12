@@ -40,6 +40,18 @@ _Avoid_: Accuracy failure, accuracy pass
 A user-supplied, versioned set of theoretical capabilities for this project's Ascend 950DT target, such as dtype-specific TFLOPS, memory capacity and bandwidth, H2D/D2H bandwidth, and interconnect characteristics; predictions made from it are estimates with sensitivity ranges, not calibrated A5 results.
 _Avoid_: A5 calibration profile, measured A5 performance
 
+**Sensitivity Envelope**:
+The low, nominal and high internally consistent A5 scenario bundles plus single-factor sensitivity results; it describes how outputs change under assumptions and has no statistical coverage or confidence meaning.
+_Avoid_: Confidence interval, prediction interval, calibrated error bar
+
+**Scenario Usable HBM Budget**:
+A per-training-rank A5 planning limit supplied directly or derived from installed capacity and an explicit reserve assumption when no allocator measurement exists.
+_Avoid_: Runtime-usable HBM, measured free memory
+
+**Robust A5 Candidate**:
+A configuration that remains feasible and ranked in the Top-5 under all low, nominal and high A5 sensitivity bundles.
+_Avoid_: Guaranteed winner, calibrated optimum
+
 **Useful Throughput**:
 The number of non-dropped, non-replayed training tokens completed per unit of step time; it is the primary configuration-search objective, while memory occupancy is a feasibility constraint.
 _Avoid_: Allocated tokens per second, memory utilization
