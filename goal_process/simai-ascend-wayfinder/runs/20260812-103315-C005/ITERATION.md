@@ -1,7 +1,7 @@
 # C005：闭合 10T-scale Workload Schema 与参数及激活计数
 
 - **开始/结束：** 2026-08-12T10:33:15+08:00 / 2026-08-12T10:54:34+08:00
-- **阶段：** RECON → HYPOTHESIS → PROBE → READY_FOR_HITL
+- **阶段：** RECON → HYPOTHESIS → PROBE → HITL_ACCEPTED
 - **动作类型：** PROBE
 - **关联验收/未知量：** AC-04、H-10、H-11、H-12、D-09
 
@@ -29,12 +29,12 @@
 - **观察事实：** 官方 checkpoint header 共 145,116 tensors、864,704,792,696 storage bytes；generator 对名称、dtype、storage shape 做全量对账，missing/extra/mismatch 均为 0。expert FP4 权重以 packed I8 shape 存储，每个 storage element 表示 2 个 logical parameters，另有独立量化 scale 与 hash routing table。
 - **错误签名：** 无。
 - **推断：** logical parameters、带 scope 的 active logical parameters、checkpoint auxiliary/storage、训练显存和 token accounting 必须独立计数；模型错误与 step 错误也必须正交，否则 501M GTS 会错误抹去模型身份。
-- **证据等级变化：** H-10～H-12 由 E1 升至 E2，技术 probe 支持，等待用户 HITL 后才标 SUPPORTED。
+- **证据等级变化：** H-10～H-12 由 E1 升至 E2；技术 probe 支持，用户已全部接受 5 项语义。
 - **信息增量：** baseline 精确为 1,598,837,347,742 logical params；61 主干和 1 MTP block 使用全局 E=2048/K=16 后，target 精确为 8,414,884,746,526 logical params；独立算术与逐 tensor 枚举一致。active 分别为主干 blocks 88,950,053,982、含 IO 的 main forward 90,803,533,923、含 MTP 的 training graph 92,345,423,134。
 
 ## 结论
 
-- **验收/交付更新：** D-09 READY_FOR_HITL；AC-04 仍 IN_PROGRESS（本票不包含 AlltoAll 与 Accuracy Gate）。
+- **验收/交付更新：** D-09 DELIVERED；ADR-0006；AC-04 仍 IN_PROGRESS（本票不包含 AlltoAll 与 Accuracy Gate）。
 - **预算变化：** 用户已明确关闭费用监控；本轮不使用远端算力。
-- **下一 micro-goal：** 用户评判 5 项 contract 决策；接受后只把 ADR/账本结论合入 `main`，删除 production 设计中的 TUI、fixture action 和 `PROTOTYPE_*` 引用。
-- **是否需决策：** 是；5 项，见本轮 HITL 请求。
+- **下一 micro-goal：** 按地图依赖选择下一张未认领前沿票据；不把 TUI、fixture action 和 `PROTOTYPE_*` 引用合入 production 设计。
+- **是否需决策：** 否；本票 5 项已全部接受。

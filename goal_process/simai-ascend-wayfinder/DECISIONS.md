@@ -99,3 +99,13 @@
 - **决定者：** 用户完成 prototype HITL 后全部接受
 - **影响：** `--device-profile` 与 legacy `--gpu_type` 冲突时 fail-closed；workload schema 不引入硬件字段；TUI、fake `424242 ns`、stub profile 和全部 `Prototype` 类型不进入 `main`。
 - **回滚条件：** Upstream 提供正式 provider ABI 时可迁移装配位置，但 cost/flow 职责分离、显式选择与 fail-closed 语义保持不变。
+
+## D-011：10T Workload 使用四层资源与带 scope 的计数口径
+
+- **时间：** 2026-08-12
+- **背景证据：** run C005；`prototype/target-10t-workload-contract@8195c3c`；`docs/adr/0006-separate-target-workload-resources-and-counting-scopes.md`
+- **选项：** 单一模型参数/YAML / 逐 tensor 模型加硬件假设 / content-addressed Model、Step、Routing、Memory 四层资源
+- **决定：** 全局 E=2048/K=16 作用于 61 main+1 MTP MoE block，目标为 8,414,884,746,526 logical trainable params；active 参数必须带三种明确 scope；GTS=`micro batch×sequence×DP×GA` 且每 step≤500M；routing 外置，memory 在 precision/optimizer/placement/recompute/runtime 未绑定时保持 symbolic 和 UNKNOWN。
+- **决定者：** 用户完成 prototype HITL 后全部接受 5 项决策
+- **影响：** 4,486,847,493,752 B 量化 checkpoint storage 不能冒充训练显存；500M GTS 下 496B assignment slots 是 62 个 routed blocks 的配置上界，不是实测路由或网络流量；AICB/SimAI 只通过内容哈希连接四层资源。
+- **回滚条件：** 固定官方模型源、tensor layout、MTP 结构或全局 expert 配置改变时重算精确数字；资源职责分离除非被 production 生命周期证据否定，否则不合并。

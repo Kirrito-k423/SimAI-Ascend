@@ -39,3 +39,11 @@ _Avoid_: Original DeepSeek-V4-Pro, dense 10T model
 **Global Token Size (GTS)**:
 The total number of tokens consumed across all data-parallel replicas and gradient-accumulation microbatches in one optimizer step; the configured hard upper bound is 500,000,000 tokens per step.
 _Avoid_: Total training token budget, tokens per second
+
+**Target Workload Contract**:
+The content-addressed composition of a tensor-based Model Manifest, optimizer-step/GTS manifest, external Routing Artifact, and symbolic Memory Event Plan that is attached to AICB-generated execution events consumed by Upstream SimAI.
+_Avoid_: Single model YAML, hardware fields embedded in the model, independent simulator
+
+**Scoped Active Parameters**:
+The logical trainable parameters touched by one token within an explicitly named execution scope—main MoE blocks, main forward including input/output, or the training graph including MTP. It is never checkpoint storage or a memory estimate.
+_Avoid_: Unqualified active parameters, model memory
