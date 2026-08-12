@@ -1,7 +1,7 @@
 # C004：验证 Ascend Provider seam 与 GPU 兼容边界
 
-- **开始/结束：** 2026-08-11T22:59:16+08:00 / 进行中
-- **阶段：** RECON → HYPOTHESIS → PROBE
+- **开始/结束：** 2026-08-11T22:59:16+08:00 / 2026-08-12T10:16:16+08:00
+- **阶段：** RECON → HYPOTHESIS → PROBE → VERIFY → REVIEW → INTEGRATE
 - **动作类型：** PROBE
 - **关联验收/未知量：** AC-03、H-07、H-08、H-09、D-08
 
@@ -20,21 +20,21 @@
 ## 执行
 
 - **脱敏命令：** `commands.md`
-- **配置/环境差异：** 待记录。
-- **代码差异：** 待原型分支提交。
-- **日志/指标：** 待记录。
+- **配置/环境差异：** 本机缺少系统 CMake，使用任务级临时 Python/CMake 工具路径完成构建；NS3 必须使用仓内兼容的 Python 3.12，系统 Python 3.14 会在 configure 阶段触发 `argparse` 不兼容。
+- **代码差异：** throwaway 分支 `3f31ca1` 新增纯 resolver、一命令 TUI 和 fake cost model；`Sys` 增加默认 null 的非 owning 注入点；`Layer::compute_time()` 增加单一可选 dispatch。没有修改 workload schema、legacy parser、`cal_busbw` 或 `MockNcclGroup`。
+- **日志/指标：** `metrics.json`；6/6 预置状态场景符合判别规则；改动后的 Analytical 完整链接成功，Simulation `libapplications-obj` 编译成功。
 
 ## 结果
 
-- **观察事实：** 待原型。
-- **错误签名：** 无。
-- **推断：** 待原型。
-- **证据等级变化：** 待原型。
-- **信息增量：** 已将原先单一 “provider” 问题拆成 Analytical `CollectiveCostModel` 与 Simulation `CollectiveFlowProvider` 两项正交 capability。
+- **观察事实：** 无 profile 的两种 backend 均解析到 legacy provider；Ascend+Analytical 解析到独立 `HCCL_COST_MODEL`；Ascend+Simulation 在缺少 flow capability 时返回 `UNSUPPORTED_BACKEND`；profile 与 legacy GPU 参数冲突时返回 `CONFLICT`；future flow capability 可独立开启。真实 Upstream 编译单元接受 `Sys`/`Layer` 最小注入，所有旧构造调用点继续依赖默认 null 参数。
+- **错误签名：** 根构建包装器会尝试写 `/etc/astra-sim` 且系统缺少 CMake；改用内部构建入口后消除。完整 NS3 在 macOS arm64 最终链接阶段出现既有 `Ipv4Header`/`UdpHeader`/`MtpInterface` 未定义符号；该签名在 prototype 之前已稳定复现，改动涉及的 `libapplications-obj` 可单独成功编译，因此记为 Upstream/平台基线问题而非本 seam 回归。
+- **推断：** `CollectiveCostModel` 是 Analytical 的最小硬件相关边界；Simulation 需要独立 `CollectiveFlowProvider`，首版不得借用 NVIDIA `MockNccl`。显式 profile resolver 位于 backend 入口装配层，并对旧/新参数并用 fail-closed。
+- **证据等级变化：** H-07～H-09 从 E1 提升为 E2（可运行状态探针 + 两 backend 核心编译证据），并经用户 HITL 接受。
+- **信息增量：** 证明 cost/flow 分离可最小注入 Upstream 两 backend；明确 production 保留 seam、删除全部试验元素。
 
 ## 结论
 
-- **验收/交付更新：** D-08 WIP；AC-03 仍 IN_PROGRESS。
+- **验收/交付更新：** D-08 DELIVERED；AC-03 PASS；ADR-0005 accepted。
 - **预算变化：** 用户已明确关闭费用监控；本轮不使用远端算力。
-- **下一 micro-goal：** 建立 baseline 构建证据并实现一命令 logic prototype。
-- **是否需决策：** 原型完成后以不超过 5 项交给用户 HITL 评判。
+- **下一 micro-goal：** 新会话按依赖关系选择下一张 frontier 票。
+- **是否需决策：** 用户已对 Analytical-first、参数冲突 fail-closed、试验元素不合入 `main` 三项全部接受。

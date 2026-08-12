@@ -89,3 +89,13 @@
 - **决定者：** 基于向后兼容与错误可见性的工程决策
 - **影响：** 不再让未知 Ascend 设备落到 NVIDIA/NONE 默认值，也不把 legacy 1/16-node 表静默用于 100k 域。
 - **回滚条件：** 不回滚 fail-closed 原则；若 upstream 提供正式 provider ABI，则 adapter 迁移到 ABI 边界。
+
+## D-010：Analytical cost 与 Simulation flow 使用正交 Provider seam
+
+- **时间：** 2026-08-12
+- **背景证据：** run C004；`prototype/ascend-provider-seam@3f31ca1`；`docs/adr/0005-separate-analytical-cost-from-simulation-flow.md`
+- **选项：** 统一复用 MockNCCL / 在 workload 内散布 Ascend 分支 / Analytical cost 与 Simulation flow 分离
+- **决定：** 首版采用 Analytical-first：入口显式解析 Profile/HCCL model，经 `Sys` 非 owning 注入 `CollectiveCostModel`，`Layer::compute_time()` 只做一次 dispatch；null 保持旧 GPU 路径。Simulation 使用独立 `CollectiveFlowProvider` capability，未实现前对 Ascend 明确 unsupported。
+- **决定者：** 用户完成 prototype HITL 后全部接受
+- **影响：** `--device-profile` 与 legacy `--gpu_type` 冲突时 fail-closed；workload schema 不引入硬件字段；TUI、fake `424242 ns`、stub profile 和全部 `Prototype` 类型不进入 `main`。
+- **回滚条件：** Upstream 提供正式 provider ABI 时可迁移装配位置，但 cost/flow 职责分离、显式选择与 fail-closed 语义保持不变。
