@@ -119,3 +119,13 @@
 - **决定者：** 用户完成 prototype HITL 后全部接受 5 项决策
 - **影响：** EP=2048 和 100k Analytical 搜索不再预先生成 O(P²) endpoint flow objects；A2AV 需要带哈希的 immutable counts artifact 或 routing stream；合成 capacity 不得产出 ns 或性能结论；aggregate 不进入 NS-3。
 - **回滚条件：** 实测 HCCL 算法证明当前守恒面缺少必要充分统计时扩展 projection；不回滚 Analytical 与 Simulation 语义隔离。
+
+## D-013：A2 校准后以三个严格 A3 留出 case 执行 30% Gate
+
+- **时间：** 2026-08-12
+- **背景证据：** `docs/research/2026-08-11-a2-a3-ground-truth-stack.md`；run C007；`docs/adr/0008-use-strict-a3-held-out-accuracy-gate.md`
+- **选项：** A2/A3 混合拟合 / 单一 A3 平衡 case / 三类严格 A3 留出且逐 case 门禁
+- **决定：** A2 以 `TP1/PP2/EP4/DP4` 校准 balanced、communication、long 三类 case；冻结 revision、参数、manifest、预测和规则后，A3 以 `TP1/PP2/EP8/DP8` 重放对应三类严格留出。CV≤10% 取 5 次 median，CV>10% 扩到总计 10 次取 type7 P90；三个 case 的 steady-state step-time APE 均≤30% 才通过。
+- **决定者：** 用户完成 grilling HITL 后全部接受 5 项决策
+- **影响：** A3 L0 readiness 不算揭盲，但任何性能字段揭盲后不得回用于首次 Gate；OOM/HBM≥85%、rank/token/finite/provenance 问题是 `INVALID_EXECUTION` 并不通过，ABI/HCCL 建域问题是 `BLOCKED_ENVIRONMENT` 且不产生精度结论；修改预测器后只能使用预注册的新 seed/message 进行第二轮复验。
+- **回滚条件：** A3 无法形成 16 个稳定训练 rank 或固定 slice 对两代均无效时重选 case；不得因结果失败而放宽严格留出或逐 case 30% 规则。

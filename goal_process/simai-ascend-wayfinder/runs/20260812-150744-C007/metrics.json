@@ -1,0 +1,33 @@
+{
+  "run_id": "20260812-150744-C007",
+  "action": "DECISION",
+  "ticket": "定义 A2→A3 Exploration Accuracy Gate 的留出集",
+  "user_hitl": "ACCEPTED_ALL_FIVE_DECISIONS",
+  "a2_calibration_cases": [
+    {"id": "A2-CAL-BALANCED", "seq": 2048, "gbs": 8, "ga": 2, "gts": 16384, "tp": 1, "pp": 2, "ep": 4, "dp": 4},
+    {"id": "A2-CAL-COMM", "seq": 1024, "gbs": 16, "ga": 4, "gts": 16384, "tp": 1, "pp": 2, "ep": 4, "dp": 4},
+    {"id": "A2-CAL-LONG", "seq": 4096, "gbs": 8, "ga": 2, "gts": 32768, "tp": 1, "pp": 2, "ep": 4, "dp": 4}
+  ],
+  "a3_held_out_cases": [
+    {"id": "A3-HOLD-BALANCED", "seq": 2048, "gbs": 8, "ga": 1, "gts": 16384, "tp": 1, "pp": 2, "ep": 8, "dp": 8},
+    {"id": "A3-HOLD-COMM", "seq": 1024, "gbs": 16, "ga": 2, "gts": 16384, "tp": 1, "pp": 2, "ep": 8, "dp": 8},
+    {"id": "A3-HOLD-LONG", "seq": 4096, "gbs": 8, "ga": 1, "gts": 32768, "tp": 1, "pp": 2, "ep": 8, "dp": 8}
+  ],
+  "sampling": {
+    "cv_formula": "sample_std/mean",
+    "cv_threshold": 0.10,
+    "low_variance_observations": 5,
+    "low_variance_representative": "MEDIAN",
+    "high_variance_total_observations": 10,
+    "high_variance_representative": "P90_LINEAR_TYPE7"
+  },
+  "gate": {
+    "error": "abs(predicted_step_time-observed_representative_step_time)/observed_representative_step_time",
+    "per_case_max_ape": 0.30,
+    "all_cases_must_pass": true,
+    "invalid_execution_passes": false,
+    "blocked_environment_is_accuracy_result": false
+  },
+  "remote_or_npu_used": false,
+  "performance_data": false
+}

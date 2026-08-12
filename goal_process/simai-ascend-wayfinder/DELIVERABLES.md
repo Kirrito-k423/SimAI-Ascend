@@ -12,3 +12,4 @@
 | D-08 | Ascend Provider seam throwaway logic prototype | `prototype/ascend-provider-seam` 分支 + Provider seam 原型票 | DELIVERED | `3f31ca1`；6/6 场景、Analytical 链接与 Simulation 核心编译通过；用户 HITL 全部接受；ADR-0005 |
 | D-09 | 10T-scale Workload Schema 与逐 tensor counter throwaway prototype | `prototype/target-10t-workload-contract` 分支 + workload schema 原型票 | DELIVERED | `8195c3c`；run C005；7/7 场景；官方 145,116 tensors 全量对账；用户全部接受；ADR-0006 |
 | D-10 | 2048-EP AlltoAll 聚合 seam throwaway prototype | `prototype/hierarchical-a2a-projection` 分支 + AlltoAll seam 原型票 | DELIVERED | `691346f`；run C006；四场景六项守恒 4/4；P=4 Upstream probe；用户全部接受；ADR-0007 |
+| D-11 | A2→A3 Exploration Accuracy Gate 决策契约 | ADR-0008 + Accuracy Gate grilling 票 | DELIVERED | run C007；A2 三校准 case、A3 三严格留出 case、5/10 次统计、逐 case≤30%；用户全部接受 |

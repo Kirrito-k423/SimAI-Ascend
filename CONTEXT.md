@@ -20,6 +20,22 @@ _Avoid_: Full Ascend port, production simulator
 The learning-phase acceptance threshold under which held-out A3 end-to-end step-time predictions may differ from measurements by up to 30% after development and calibration on A2; it proves that the workflow is connected, not that A5 or 100,000-card predictions are production-accurate.
 _Avoid_: Production accuracy, A5 accuracy guarantee
 
+**A2 Calibration Set**:
+The performance observations from the A2 lane that may be used to fit or tune the Ascend Vertical Slice predictor before its revision, inputs and predictions are frozen.
+_Avoid_: Cross-generation truth, A3-assisted calibration
+
+**Strict A3 Held-out Set**:
+The preregistered A3 end-to-end cases whose performance observations remain unseen until the predictor, inputs, predictions and evaluation rule are frozen; after performance unblinding they cannot be reused as a strict holdout.
+_Avoid_: Second calibration set, reusable validation benchmark
+
+**Invalid Accuracy Execution**:
+A held-out attempt whose training semantics or completeness is invalid, such as OOM, unsafe memory occupancy, rank loss, non-finite values, token loss/replay or provenance drift; it cannot pass the Exploration Accuracy Gate.
+_Avoid_: Large prediction error, environment unavailable
+
+**Blocked Accuracy Environment**:
+A state in which the pinned runtime, ABI or rank domain cannot be established, so no valid accuracy comparison exists yet.
+_Avoid_: Accuracy failure, accuracy pass
+
 **A5 Estimated Profile**:
 A user-supplied, versioned set of theoretical capabilities for this project's Ascend 950DT target, such as dtype-specific TFLOPS, memory capacity and bandwidth, H2D/D2H bandwidth, and interconnect characteristics; predictions made from it are estimates with sensitivity ranges, not calibrated A5 results.
 _Avoid_: A5 calibration profile, measured A5 performance
