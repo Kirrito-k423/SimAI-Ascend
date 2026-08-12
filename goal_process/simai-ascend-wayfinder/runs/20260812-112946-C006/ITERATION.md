@@ -1,7 +1,7 @@
 # C006：验证 2048-EP AlltoAll 聚合模型的可扩展 seam
 
-- **开始/结束：** 2026-08-12T11:29:46+08:00 / 进行中
-- **阶段：** RECON → HYPOTHESIS → PROBE
+- **开始/结束：** 2026-08-12T11:29:46+08:00 / 2026-08-12T11:44:03+08:00
+- **阶段：** RECON → HYPOTHESIS → PROBE → READY_FOR_HITL
 - **动作类型：** PROBE
 - **关联验收/未知量：** AC-04、H-13、H-14、D-10
 
@@ -20,21 +20,21 @@
 ## 执行
 
 - **脱敏命令：** `commands.md`
-- **配置/环境差异：** 待记录。
-- **代码差异：** 待原型分支提交。
-- **日志/指标：** 待记录。
+- **配置/环境差异：** 本地 Python 3 标准库与系统 C++17；无远端/NPU/NS-3；合成 capacity 只用于逻辑等价。
+- **代码差异：** throwaway 分支新增 pure projection logic、TUI、确定性 transcript 和真实 Upstream P=4 C++ probe；未修改 Upstream 或 production 文件。
+- **日志/指标：** `metrics.json`；四场景六项守恒；三个缺失输入反例；P=4 C++ probe；EP=2048 与 ragged 100k 公式投影。
 
 ## 结果
 
-- **观察事实：** Upstream 对 P ranks 生成 P(P−1) 个 flow objects、每条 `chunksize=data_size/P`，且每条复制包含其余 P−1 ranks 的 `prev` vector；rank view 随后只保留 src/dst 涉及自己的 flows。
-- **错误签名：** 暂无运行错误；发现表示复杂度风险。
-- **推断：** 当前生成阶段 flow objects 为 O(P²)，`prev` integer references 最坏 O(P³)；必须在 flow materialization 前引入 Analytical projection seam，而不是事后压缩每-rank view。
-- **证据等级变化：** H-13/H-14 保持 E1，待可运行对照。
-- **信息增量：** P=2048 时为 4,192,256 directed flows；按当前实现每 flow 复制 P−1 个 ranks，仅 `prev` integer references 即 8,581,548,032 个，不把语言对象字节估算写成实测内存。
+- **观察事实：** Upstream P=4 probe 实际生成 12 个 unique directed flows、24 个 duplicated rank-view entries、36 个 unique `prev` integer references；每 flow 为 4096/4=1024 B，总 network bytes=12,288。Hierarchical projection 在均匀、热点、locality、ragged 四场景的 total/rank/domain/resource/bottleneck 六项均与 exact baseline 相同。
+- **错误签名：** 对称折叠在 hotspot/ragged 失败；全局代表流除 uniform 外失败；这是预期反证而非实现错误。编译 Upstream 文件暴露三条既有 warning，本票不修改。
+- **推断：** 当前生成阶段 flow objects O(P²)、`prev` refs O(P³)；主 Analytical seam 必须在 materialization 前做 projection。Uniform A2A 可闭式 O(P+D²+R)；arbitrary dense A2AV 只能承诺流式状态 O(P+D²+R)，读取时间仍 O(P²)。
+- **证据等级变化：** H-13/H-14 由 E1 升至 E2，技术 probe 支持，等待用户 HITL 后才标 SUPPORTED。
+- **信息增量：** P=2048 为 4,192,256 directed flows、8,581,548,032 个 `prev` refs，对应 projection 8,200 summary cells；100k/98 ragged domains 的 uniform 闭式 projection 为 419,208 cells，不枚举 9,999,900,000 pairs。以上是 record/cell count，不是内存或性能实测。
 
 ## 结论
 
-- **验收/交付更新：** D-10 WIP；AC-04 仍 IN_PROGRESS。
+- **验收/交付更新：** D-10 READY_FOR_HITL；AC-04 仍 IN_PROGRESS。
 - **预算变化：** 用户已关闭费用监控；本轮不使用远端算力。
-- **下一 micro-goal：** 实现四表示、四场景与一组 2048-scale 公式投影。
-- **是否需决策：** 原型完成后最多 5 项 HITL。
+- **下一 micro-goal：** 用户评判 5 项 seam 决策；接受后仅把 ADR/账本结论合入 `main`，不合入 TUI/合成矩阵/capacity。
+- **是否需决策：** 是；5 项，见本轮 HITL 请求。
