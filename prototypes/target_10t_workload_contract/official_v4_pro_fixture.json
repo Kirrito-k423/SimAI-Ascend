@@ -1,0 +1,37 @@
+{
+  "source": {
+    "repository": "deepseek-ai/DeepSeek-V4-Pro",
+    "commit": "45040942eb0d1c4e29fa6b92a6195f110e9e7444",
+    "config_sha256": "5fe4568daee51c208cb8a79538eaeda090ae011ade1dee2c386aa95f569c810e",
+    "inference_model_sha256": "ce962f1face79d4f633d36436576214057a7e11443c9789935e1deb5c6cd1d71",
+    "safetensors_index_sha256": "a3a39b9ccb4e729851922fc9c770f5c5755e7b9d7e96cd02c23f0e12b5e25cb9",
+    "header_acquisition": "HTTP_RANGE_ONLY_NO_TENSOR_DATA"
+  },
+  "architecture": {
+    "vocab_size": 129280,
+    "hidden_size": 7168,
+    "num_hidden_layers": 61,
+    "num_mtp_layers": 1,
+    "num_hash_layers": 3,
+    "num_attention_heads": 128,
+    "head_dim": 512,
+    "q_lora_rank": 1536,
+    "o_groups": 16,
+    "o_lora_rank": 1024,
+    "moe_intermediate_size": 3072,
+    "n_routed_experts": 384,
+    "n_shared_experts": 1,
+    "topk": 6,
+    "hc_mult": 4,
+    "index_n_heads": 64,
+    "index_head_dim": 128,
+    "compress_ratios": [128, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 0]
+  },
+  "checkpoint_expected": {
+    "tensor_count": 145116,
+    "logical_trainable_params": 1598837347742,
+    "quant_scale_elements": 49150268416,
+    "routing_table_elements": 2327040,
+    "storage_bytes": 864704792696
+  }
+}
