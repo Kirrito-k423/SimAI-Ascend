@@ -149,3 +149,13 @@
 - **决定者：** 用户完成 grilling HITL 后全部接受 5 项决策
 - **影响：** 每个合法 grid 生成 flat/topology-aware、global/local EP 等成对 placement；输出 rank/group digest、跨域 bytes、domain matrix、shared load 与 local hit。MBS/GA/recompute 在 `GTS≤500M` 和 `peak HBM≤95%×Scenario Usable HBM Budget` 下按 Useful Throughput 搜索；全部依赖逐项 fail-closed。
 - **回滚条件：** 权威 BOM 改变时重建拓扑身份；训练栈实证支持非均匀 groups 与 ragged optimizer 后重审 exact-100k 可行域；不得为整除混合不同证据身份。
+
+## D-016：Top-5 使用 fail-closed 多保真漏斗与独立排名切片
+
+- **时间：** 2026-08-13
+- **背景证据：** ADR-0007/0009/0010；run C010；`docs/adr/0011-use-fail-closed-multi-fidelity-top5-search.md`
+- **选项：** 所有候选直接 Simulation / 仅按 Analytical 单点冠军 / F0–F3 证据分层并输出 slice-local Top-5
+- **决定：** F0 静态合法性 fail-closed，F1 对全部合法候选做 Analytical，F2 每切片晋级 throughput Top-20 加 Pareto/拐点/多样性代表且上限100，F3 只由独立 flow provider 做小规模审计。不同 topology、active/resource 与 A5 bundle 独立排名；主指标是 Useful Throughput，缺完整时间只进 traffic-only。
+- **决定者：** 用户完成 grilling HITL 后全部接受 5 项决策
+- **影响：** 每切片输出 Top-5 与差距，并另标最高吞吐、最低通信、最高 fault goodput 和最佳 Robust；fault contract 未完成前 goodput 为 UNKNOWN。Simulation 超过 #14 门限时标 `SIMULATION_DISAGREEMENT` 并暂停配置族冠军结论；截断必须披露覆盖率，不宣称全局最优。
+- **回滚条件：** 真实搜索 recall 证明 Top-20/100 cap 系统漏选时版本化调整晋级策略；goodput 与 Simulation 的参数只由各自票据追加，不在本决定中臆测。

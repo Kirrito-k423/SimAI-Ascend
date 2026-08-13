@@ -1,0 +1,27 @@
+{
+  "run_id": "20260813-172910-C010",
+  "action": "DECISION",
+  "ticket": "定义多保真配置搜索与 Top-5 输出契约",
+  "user_hitl": "ACCEPTED_ALL_FIVE_DECISIONS",
+  "fidelity_stages": [
+    "F0_STATIC_VALIDATED",
+    "F1_ANALYTICAL_SCREENED",
+    "F2_ANALYTICAL_REFINED",
+    "F3_SIMULATION_AUDITED"
+  ],
+  "promotion": {
+    "useful_throughput_top_n": 20,
+    "include_pareto_knees_and_diversity": true,
+    "refined_cap_per_slice": 100,
+    "truncation_requires_coverage_disclosure": true
+  },
+  "ranking": {
+    "primary": "USEFUL_THROUGHPUT",
+    "incomplete_time_is_ranked": false,
+    "robust_requires_top5_in_all_three_a5_bundles": true
+  },
+  "goodput_without_fault_contract": "UNKNOWN",
+  "simulation_can_directly_measure_100k": false,
+  "remote_or_npu_used": false,
+  "performance_data": false
+}

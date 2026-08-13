@@ -57,8 +57,20 @@ The number of non-dropped, non-replayed training tokens completed per unit of st
 _Avoid_: Allocated tokens per second, memory utilization
 
 **Typical Configuration Set**:
-The five highest-ranked feasible configurations plus named representatives for highest throughput, lowest exposed communication, and highest fault-tolerant goodput, including their performance gaps and resource trade-offs.
+The slice-local five highest-ranked feasible configurations plus named representatives for highest throughput, lowest exposed communication, highest fault-tolerant goodput, and the best Robust A5 Candidate, including their performance gaps and resource trade-offs. The goodput representative remains UNKNOWN until its fault scenario is complete.
 _Avoid_: Single best configuration, champion only
+
+**Search Fidelity Stage**:
+The highest fail-closed evidence stage completed by a candidate: static validation, Analytical screening, refined Analytical evaluation, or independent Simulation audit. It is an evidence label, not a score, and a lower stage cannot impersonate a higher one.
+_Avoid_: Accuracy tier, interchangeable backend result
+
+**Analytical Ranking Slice**:
+One compatible topology identity, active-rank/resource interpretation, and A5 low/nominal/high bundle within which feasible configurations may be ranked by Useful Throughput. Top-5 lists from different slices are not pooled.
+_Avoid_: Global leaderboard, averaged topology scenario
+
+**Simulation Disagreement**:
+The state of a configuration family whose selected small-scale Simulation audit exceeds the separately accepted mismatch gate; its champion claim is withheld until the model is revised and revalidated, without treating the audit as a 100k measurement.
+_Avoid_: Automatic Analytical back-fit, measured 100k failure
 
 **Target 10T Workload**:
 The DeepSeek-V4-Pro-derived training workload that retains its trunk, one shared expert, first three hash-routed MoE layers, MTP depth, and expert intermediate size 3,072 while using 2,048 routed experts and MoE TopK 16, yielding roughly 8.31–8.42T total parameters as the accepted 10T-scale model.
