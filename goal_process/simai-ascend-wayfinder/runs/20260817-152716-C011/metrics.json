@@ -32,5 +32,6 @@
   "remote_or_npu_used": false,
   "ns3_run": false,
   "performance_data": false,
-  "wayfinder_acceptance": "6/6"
+  "wayfinder_acceptance": "6/6",
+  "map_state": "CLOSED"
 }

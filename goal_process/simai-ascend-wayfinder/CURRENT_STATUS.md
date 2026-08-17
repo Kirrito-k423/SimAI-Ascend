@@ -12,7 +12,7 @@
 - **目标：** 关闭 Wayfinder 地图全部必要决策并形成 `/to-spec` 输入。
 - **已完成：** Upstream SimAI 基线、A2/A3 Ground Truth、Profile/HCCL schema、Analytical Provider seam、10T workload、2048-EP traffic、30% Accuracy Gate、A5 sensitivity、100k placement、Top-5、Fault Goodput 与 Simulation smoke 全部形成接受决策。
 - **最后证据：** run C011；ADR-0012/0013；prototype `simulation-smoke-contract@b9c3297`；用户一次性接受剩余10项。
-- **地图状态：** 没有剩余必要子票据或未具体化迷雾；关闭两张末票后即可关闭地图。
+- **地图状态：** 两张末票和 Wayfinder 地图均已关闭；没有剩余必要子票据或未具体化迷雾。
 - **下一步：** 以 `TO-SPEC.md`、CONTEXT 和 ADR-0001～0013 为输入运行 `/to-spec`，把决策转成实现规格、阶段和测试。
 - **需要决策：** 否。A5 数值、现场 ABI、HCCL 曲线、failure observations 与 exact-100k ragged support 是实现输入或实证门禁，不是未决产品选择。
 
