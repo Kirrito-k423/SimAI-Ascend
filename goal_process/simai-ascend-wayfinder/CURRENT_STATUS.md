@@ -1,42 +1,32 @@
 # 当前状态
 
 - **Goal：** simai-ascend-wayfinder
-- **更新时间：** 2026-08-13T17:29:10+08:00
-- **状态：** 绿
-- **阶段：** FRONTIER_RECORDED
+- **更新时间：** 2026-08-17T15:27:16+08:00
+- **状态：** 完成
+- **阶段：** READY_FOR_TO_SPEC
 - **截止时间：** 未设定
-- **验收进度：** 4/6
+- **验收进度：** 6/6
 
 ## 一分钟摘要
 
 - **目标：** 关闭 Wayfinder 地图全部必要决策并形成 `/to-spec` 输入。
-- **已完成：** Upstream 基线、A2/A3 环境与 Ground Truth 栈、三层 Profile/HCCL 契约、Analytical-first Provider seam，以及 10T-scale Workload Contract 均已形成决策。
-- **当前主阻塞：** Top-5 多保真搜索已关闭；故障 goodput 与 Simulation smoke 仍有开放票据。
-- **关键证据：** run C010；F0–F3 fail-closed 漏斗；Top-20+Pareto/diversity、F2 每切片≤100；独立 ranking slices；完整 provenance 与 Simulation disagreement。
-- **已解决：** 非法与时间不完整候选不得进入 time Top-5；不同 topology/resource/A5 bundle 不混排；小规模 Simulation 只能审计，不能冒充 100k 实测或静默重排。
-- **下一步：** 下一轮处理 #10“定义故障 goodput 敏感性场景”；本轮不认领、不展开第二张票。
-- **需要决策：** 否；本票五项搜索与 Top-5 决策已全部接受。
+- **已完成：** Upstream SimAI 基线、A2/A3 Ground Truth、Profile/HCCL schema、Analytical Provider seam、10T workload、2048-EP traffic、30% Accuracy Gate、A5 sensitivity、100k placement、Top-5、Fault Goodput 与 Simulation smoke 全部形成接受决策。
+- **最后证据：** run C011；ADR-0012/0013；prototype `simulation-smoke-contract@b9c3297`；用户一次性接受剩余10项。
+- **地图状态：** 没有剩余必要子票据或未具体化迷雾；关闭两张末票后即可关闭地图。
+- **下一步：** 以 `TO-SPEC.md`、CONTEXT 和 ADR-0001～0013 为输入运行 `/to-spec`，把决策转成实现规格、阶段和测试。
+- **需要决策：** 否。A5 数值、现场 ABI、HCCL 曲线、failure observations 与 exact-100k ragged support 是实现输入或实证门禁，不是未决产品选择。
 
 ## 交付状态
 
-- **代码：** C006 原型只保留在 `prototype/hierarchical-a2a-projection`；主线仅接收证据账本与已接受决策，不合入原型代码。
-- **文档：** 研究证据库、CONTEXT、ADR-0001～0011、能力矩阵、Ground Truth 栈、schema、Accuracy Gate、A5 敏感性、100k placement 与 Top-5 决策包已形成。
-- **复现：** 只发布脱敏探测命令模板，不发布地址和认证信息。
-- **日志与报告：** `goal_process/simai-ascend-wayfinder/`。
+- **代码：** Wayfinder 不合入生产实现；四个 throwaway prototype 分支仅保留一手决策证据。
+- **文档：** `CONTEXT.md`、ADR-0001～0013、三份研究证据、Goal 账本与 `TO-SPEC.md` 完整。
+- **复现：** 公开仓只含脱敏版本、shape、聚合指标、状态与内容哈希，不含远程身份、认证信息或私有原始日志。
+- **成本：** 用户明确关闭费用监控；未更新 `RMB-Cost.md`。
 
-## 时间与预算
+## 实施期已知门禁
 
-- **环境：** 3 台可达机器完成只读盘点：A2×2、A3×1。
-- **调研：** C005 已通过官方 Range header 审计区分 logical parameters、FP4 packed storage、quant scales 与 hash routing table。
-- **实现：** 本票只冻结多保真搜索与输出契约，不实现生产搜索器、100k 配置或 Simulation flow provider。
-- **实验：** 本轮不运行远端、NPU、NS-3 或真实性能测试，也不生成具体冠军配置。
-- **文档与交付：** 1 份公开矩阵、1 份结构化指标、Goal 账本更新。
-- **资源等待：** `/research` 子任务超过预注册 75 分钟上限，主线程中断等待并要求按现有证据立即落盘；未占用远端算力。
-- **剩余预算：** 未设置 token、时间、算力或重试预算；后续实验继续执行有界停止规则。
-- **费用报告：** 用户明确要求本项目不启用费用监控；不更新 `RMB-Cost.md`。
-
-## 条件化 ETA
-
-- **路径 A：** 下一轮以最多 5 项一批冻结 fault domain、MTBF/恢复、checkpoint、spare 与 ragged communicator 的符号敏感性场景。
-- **路径 B：** 完成 goodput 后再单独决定最小 Simulation smoke；不把两票合并成 100k packet simulation。
-- **最晚决策点：** 本轮关闭且只关闭 Top-5 搜索一票；下一 frontier 记录为 #10“定义故障 goodput 敏感性场景”。
+- A2/A3 必须先通过 L0 环境与共同栈，再冻结预测并执行严格 A3 留出；三 case 逐项 APE≤30%。
+- A5 无真机，只能消费用户/厂商输入和 EXTRAPOLATED sensitivity；缺字段逐消费点 UNKNOWN。
+- exact 100,000 ragged 只有训练框架证明 group/shard/optimizer/recovery 语义后才进入 executable lane。
+- Fault Goodput 在缺 MTBF/恢复/checkpoint 数字时只输出符号面和 break-even，不产生最高 goodput 代表。
+- Simulation 先过 `FLOW_SMOKE_PASS`，再过逐 case≤30%的 F3；任何 disagreement 暂停相关冠军结论。

@@ -56,6 +56,18 @@ _Avoid_: Guaranteed winner, calibrated optimum
 The number of non-dropped, non-replayed training tokens completed per unit of step time; it is the primary configuration-search objective, while memory occupancy is a feasibility constraint.
 _Avoid_: Allocated tokens per second, memory utilization
 
+**Fault Goodput**:
+The expected committed useful training tokens divided by total wall-clock time including checkpoint, detection, recovery, replay and state-reconstruction costs within one explicit Fault Scenario.
+_Avoid_: Healthy throughput, availability alone
+
+**Fault Scenario**:
+A content-addressed failure and recovery policy with explicit event scope or trace, correlation, checkpoint, spare, remap and timing inputs. Missing consumed inputs keep its goodput UNKNOWN.
+_Avoid_: Invented nominal MTBF, averaged reliability case
+
+**Fault-Robust Candidate**:
+A configuration that remains feasible and in the Top-5 of every complete Fault Scenario within the same topology, resource and A5 slice.
+_Avoid_: Failure-proof configuration, healthy-throughput winner
+
 **Typical Configuration Set**:
 The slice-local five highest-ranked feasible configurations plus named representatives for highest throughput, lowest exposed communication, highest fault-tolerant goodput, and the best Robust A5 Candidate, including their performance gaps and resource trade-offs. The goodput representative remains UNKNOWN until its fault scenario is complete.
 _Avoid_: Single best configuration, champion only
@@ -71,6 +83,14 @@ _Avoid_: Global leaderboard, averaged topology scenario
 **Simulation Disagreement**:
 The state of a configuration family whose selected small-scale Simulation audit exceeds the separately accepted mismatch gate; its champion claim is withheld until the model is revised and revalidated, without treating the audit as a 100k measurement.
 _Avoid_: Automatic Analytical back-fit, measured 100k failure
+
+**Synthetic Ascend Smoke Topology**:
+The 16-rank, two-logical-domain topology used only to exercise an HCCL-specific Simulation flow path and cross-domain placement contrast; it is not an A5 or measured SuperPod topology.
+_Avoid_: Ascend 950DT topology, miniature 100k topology
+
+**Flow Smoke Pass**:
+The state in which every preregistered Ascend Simulation smoke case completes with exact flow, membership, dependency and byte-conservation evidence through the HCCL flow provider, regardless of whether timing agreement passes.
+_Avoid_: F3 timing pass, A5 accuracy proof
 
 **Target 10T Workload**:
 The DeepSeek-V4-Pro-derived training workload that retains its trunk, one shared expert, first three hash-routed MoE layers, MTP depth, and expert intermediate size 3,072 while using 2,048 routed experts and MoE TopK 16, yielding roughly 8.31–8.42T total parameters as the accepted 10T-scale model.

@@ -159,3 +159,23 @@
 - **决定者：** 用户完成 grilling HITL 后全部接受 5 项决策
 - **影响：** 每切片输出 Top-5 与差距，并另标最高吞吐、最低通信、最高 fault goodput 和最佳 Robust；fault contract 未完成前 goodput 为 UNKNOWN。Simulation 超过 #14 门限时标 `SIMULATION_DISAGREEMENT` 并暂停配置族冠军结论；截断必须披露覆盖率，不宣称全局最优。
 - **回滚条件：** 真实搜索 recall 证明 Top-20/100 cap 系统漏选时版本化调整晋级策略；goodput 与 Simulation 的参数只由各自票据追加，不在本决定中臆测。
+
+## D-017：无 A5 MTBF 时以符号 Fault Goodput 场景代替单点冠军
+
+- **时间：** 2026-08-17
+- **背景证据：** ADR-0009～0012；run C011；三类100k active/capacity/spare 口径
+- **选项：** 假设单一 MTBF / 用健康吞吐乘 availability / 完整恢复策略加符号响应面与 break-even
+- **决定：** Fault Goodput 只计算 committed useful tokens/总墙钟时间；按 topology fault domain 显式输入事件率/trace、相关性和 detection→warmup 全链路。固定 no-failure、rollback、hot-spare、ragged、correlated-loss 五策略；缺 A5 数字时只输出符号面和 break-even，不造 nominal champion。
+- **决定者：** 用户一次性接受剩余两票共 10 项决策
+- **影响：** checkpoint 必须覆盖完整训练状态；spare capacity 不等于热备；ragged 需框架语义证明。common trace 先5次，CV>10%扩10次并按不利P10 goodput排名；场景不完整时最高 fault goodput 保持 UNKNOWN。
+- **回滚条件：** 有 A5/同源系统 immutable failure observations 后形成有 provenance 的 low/nominal/high fault bundles；不得原地把符号假设升级为 MEASURED。
+
+## D-018：Simulation smoke 使用16 ranks两域并分离结构与时间门禁
+
+- **时间：** 2026-08-17
+- **背景证据：** ADR-0005/0007/0008/0011；prototype `simulation-smoke-contract@b9c3297`；run C011；`docs/adr/0013-use-a-16-rank-two-domain-simulation-smoke.md`
+- **选项：** 单域最小运行 / 直接放大到1024或100k / 16-rank两域、17 micro+2 E2E 的分级门禁
+- **决定：** Linux CPU 上用 `SYNTHETIC_ASCEND_SMOKE_TOPOLOGY`（2×8 ranks）；五 collective×三消息点加两种额外A2AV，共17 micro；GT-TARGET 16-rank topology-aware/striped 共2 E2E。必须经独立 HCCL flow provider，禁止任何 NVIDIA fallback。
+- **决定者：** 用户一次性接受剩余两票共 10 项决策
+- **影响：** 19 case 两次运行结构/守恒/digest 全过才是 `FLOW_SMOKE_PASS`；逐 case Analytical-vs-Simulation APE≤30%、消息单调且 placement 排序一致才是 `F3_SIMULATION_AUDITED`。时间失败保留 flow support 但标 `SIMULATION_DISAGREEMENT`；suite 60分钟超限为资源阻塞。
+- **回滚条件：** 16 ranks 无法表达生产 provider 最小两域 group 时才扩拓扑；消息点超出已接受测量域时预注册同域 small/middle/large 替代，禁止把 synthetic topology 当 A5 精度证据。

@@ -1,0 +1,36 @@
+{
+  "run_id": "20260817-152716-C011",
+  "action": "DECISION",
+  "tickets": [
+    "定义故障 goodput 敏感性场景",
+    "决定 Simulation smoke test 的最小拓扑与验收"
+  ],
+  "user_hitl": "ACCEPTED_ALL_TEN_DECISIONS",
+  "fault_policies": [
+    "NO_FAILURE_UPPER_BOUND",
+    "ROLLBACK_RESTART",
+    "HOT_SPARE_REMAP",
+    "RAGGED_CONTINUE",
+    "CORRELATED_DOMAIN_LOSS"
+  ],
+  "goodput_sampling": {
+    "initial_traces": 5,
+    "cv_threshold": 0.10,
+    "high_variance_total_traces": 10,
+    "high_variance_rank_statistic": "P10_LINEAR_TYPE7"
+  },
+  "simulation_smoke": {
+    "ranks": 16,
+    "logical_domains": 2,
+    "ranks_per_domain": 8,
+    "micro_cases": 17,
+    "end_to_end_cases": 2,
+    "timing_ape_max": 0.30,
+    "suite_wall_minutes_max": 60,
+    "prototype_revision": "b9c3297"
+  },
+  "remote_or_npu_used": false,
+  "ns3_run": false,
+  "performance_data": false,
+  "wayfinder_acceptance": "6/6"
+}

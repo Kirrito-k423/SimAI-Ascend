@@ -5,8 +5,8 @@
 | D-01 | Wayfinder 决策地图 | GitHub issue map | DELIVERED | 地图标题“从 Upstream SimAI 打通 Ascend 并搜索 100k/10T 典型配置” |
 | D-02 | 一手资料证据库 | `docs/research/2026-08-11-simai-ascend-evidence.md` | DELIVERED | `main@0703bcf` |
 | D-03 | A2/A3 脱敏能力矩阵 | `docs/research/2026-08-11-a2-a3-capability-matrix.md` | DELIVERED | `ccf0cdd82a9484044869ad77d40786862bcded1b`；环境盘点票已关闭 |
-| D-04 | Goal 过程证据 | `goal_process/simai-ascend-wayfinder/` | WIP | C001 已形成；Goal 后续继续追加 |
-| D-05 | `/to-spec` 输入 | GitHub map + linked assets | NOT_STARTED | 待地图闭合 |
+| D-04 | Goal 过程证据 | `goal_process/simai-ascend-wayfinder/` | DELIVERED | C001～C011、验收/假设/决定/状态账本完整 |
+| D-05 | `/to-spec` 输入 | `goal_process/simai-ascend-wayfinder/TO-SPEC.md` + GitHub map + linked assets | DELIVERED | ADR-0001～0013；六项验收 PASS；剩余未知均为实现输入或实证门禁 |
 | D-06 | A2/A3 Ground Truth 栈与最小 DeepSeek MoE slice 决策包 | `docs/research/2026-08-11-a2-a3-ground-truth-stack.md` | DELIVERED | run C002；Ground Truth 研究票；官方固定提交与 L0–L3 契约 |
 | D-07 | Ascend Hardware Profile 与 HCCL Cost Model Schema 决策包 | `docs/research/2026-08-11-ascend-profile-hccl-schema.md` | DELIVERED | run C003；Hardware Profile/HCCL Schema 研究票；三层资源与机器校验契约 |
 | D-08 | Ascend Provider seam throwaway logic prototype | `prototype/ascend-provider-seam` 分支 + Provider seam 原型票 | DELIVERED | `3f31ca1`；6/6 场景、Analytical 链接与 Simulation 核心编译通过；用户 HITL 全部接受；ADR-0005 |
@@ -16,3 +16,5 @@
 | D-12 | A5 Estimated Profile 与 Sensitivity Envelope 决策契约 | ADR-0009 + A5 Profile grilling 票 | DELIVERED | run C008；必填/条件输入、domain-keyed efficiency、low/nominal/high、局部 fail-closed、稳健 Top-5；用户全部接受 |
 | D-13 | 100k topology 与 folded placement 搜索契约 | ADR-0010 + 100k placement grilling 票 | DELIVERED | run C009；独立拓扑身份、三类 active/capacity 口径、双恒等式、放置对照、GTS/HBM 边界；用户全部接受 |
 | D-14 | 多保真搜索与 slice-local Top-5 输出契约 | ADR-0011 + Top-5 grilling 票 | DELIVERED | run C010；F0–F3 fail-closed 漏斗、Top-20+Pareto/100 cap、独立切片、确定性排名、Simulation disagreement 与完整 provenance；用户全部接受 |
+| D-15 | Fault Goodput 符号敏感性契约 | ADR-0012 + goodput grilling 票 | DELIVERED | run C011；五类策略、完整 checkpoint/spare/ragged 语义、common trace 5/10 与 P10、无 MTBF 时只给 break-even；用户全部接受 |
+| D-16 | 16-rank 两域 Simulation smoke 契约 | ADR-0013 + prototype `b9c3297` + Simulation smoke 票 | DELIVERED | run C011；17 micro+2 E2E、Flow Smoke 与 F3 分离、逐 case≤30%、60分钟资源门；用户全部接受 |
