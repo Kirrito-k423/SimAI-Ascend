@@ -13,6 +13,10 @@ namespace AstraSim {
 
 enum class CostedCollective {
   AllReduce,
+  AllGather,
+  ReduceScatter,
+  AllToAll,
+  AllToAllV,
   Unsupported,
 };
 
@@ -52,6 +56,10 @@ struct CollectiveCostSummary {
   CostedCollective collective = CostedCollective::Unsupported;
   CostedGroupType group_type = CostedGroupType::Unsupported;
   std::string topology_domain;
+  std::string payload_semantics;
+  uint64_t input_bytes_per_rank = 0;
+  uint64_t output_bytes_per_rank = 0;
+  std::string routing_digest = "NOT_REQUIRED";
   std::string unsupported_reason;
 };
 

@@ -8,10 +8,19 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "astra-sim/system/CollectiveCostModel.hh"
 
 namespace SimAIContract {
+
+struct HcclCostSegment {
+  uint64_t minimum_message_bytes = 0;
+  uint64_t maximum_message_bytes = 0;
+  bool maximum_inclusive = false;
+  uint64_t startup_ns = 0;
+  double bandwidth_Bps = 0.0;
+};
 
 struct HcclCostModelConfig {
   std::string model_id;
@@ -24,6 +33,13 @@ struct HcclCostModelConfig {
   uint64_t maximum_message_bytes = 0;
   uint64_t startup_ns = 0;
   double bandwidth_Bps = 0.0;
+  std::vector<HcclCostSegment> segments;
+  std::string payload_semantics;
+  std::string traffic_algorithm;
+  std::string source_adapter = "NONE";
+  std::string routing_digest = "NOT_REQUIRED";
+  uint64_t routing_total_traffic_bytes = 0;
+  uint64_t routing_max_receive_bytes = 0;
   std::string topology_domain;
   std::string topology_digest;
 };

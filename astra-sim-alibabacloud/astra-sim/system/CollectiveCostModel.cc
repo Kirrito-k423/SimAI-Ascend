@@ -11,6 +11,14 @@ const char* CostedCollectiveName(CostedCollective collective) {
   switch (collective) {
     case CostedCollective::AllReduce:
       return "ALL_REDUCE";
+    case CostedCollective::AllGather:
+      return "ALL_GATHER";
+    case CostedCollective::ReduceScatter:
+      return "REDUCE_SCATTER";
+    case CostedCollective::AllToAll:
+      return "ALL_TO_ALL";
+    case CostedCollective::AllToAllV:
+      return "ALL_TO_ALL_V";
     case CostedCollective::Unsupported:
       return "UNSUPPORTED";
   }

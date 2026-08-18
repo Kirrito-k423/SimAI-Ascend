@@ -144,6 +144,393 @@ class AnalyticalRunContractTest(unittest.TestCase):
             result = json.loads(result_path.read_text())
         return completed, result
 
+    def run_generated_hccl_contract(
+        self,
+        *,
+        collective,
+        workload_token,
+        payload_semantics,
+        reduction,
+        traffic_algorithm,
+        message_bytes=1048576,
+        routing_matrix=None,
+        include_routing=True,
+    ):
+        """Build immutable synthetic artifacts, then observe the real process."""
+        profile_path = FIXTURES / "minimal_ascend_profile.json"
+        profile_digest = "sha256:" + hashlib.sha256(
+            profile_path.read_bytes()
+        ).hexdigest()
+        duration_ns = round(20000 + message_bytes / 25000000000 * 1000000000)
+        raw = {
+            "apiVersion": "simai.ascend.observation/v1alpha1",
+            "kind": "HcclRawSample",
+            "schemaSemver": "0.1.0",
+            "metadata": {"id": f"synthetic-{collective.lower()}-point"},
+            "spec": {
+                "profileRef": "synthetic-a2-four-rank-host",
+                "profileDigest": profile_digest,
+                "collective": collective,
+                "group": {
+                    "rankCount": 4,
+                    "scope": "HOST",
+                    "groupType": "TP",
+                    "topologyDigest": "sha256:" + "1" * 64,
+                },
+                "algorithm": {
+                    "name": traffic_algorithm,
+                    "version": "synthetic-v1",
+                },
+                "payload": {
+                    "bytesPerRank": {
+                        "semantics": payload_semantics,
+                        "uniformValue": message_bytes,
+                        "unit": "B",
+                    },
+                    "dtype": "BF16",
+                    "reduction": reduction,
+                },
+                "statistics": {
+                    "timingStatistic": "ARITHMETIC_MEAN",
+                    "sampleCount": 5,
+                    "warmupExcluded": True,
+                },
+                "normalized": {
+                    "averageTime": {"value": duration_ns, "unit": "ns"},
+                    "algBandwidth": {
+                        "value": message_bytes * 1000000000 / duration_ns,
+                        "unit": "B/s",
+                    },
+                },
+                "correctness": {"status": "PASS"},
+                "eligibility": {"fit": True, "reasons": []},
+                "evidence": [
+                    {
+                        "id": "worked-example-input",
+                        "class": "USER_INPUT",
+                        "readiness": "FIELD_UNVERIFIED",
+                        "source": {
+                            "uri": f"fixture://issue-18/{collective.lower()}",
+                            "ref": "worked-example-v1",
+                        },
+                        "method": {"name": "synthetic-point", "version": "1"},
+                        "asOf": "2026-08-18T00:00:00+08:00",
+                        "conditions": {"hardwareAvailable": False},
+                        "sanitization": "synthetic-no-host-data",
+                    }
+                ],
+            },
+        }
+
+        with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:
+            run_directory = self.prepare_run_directory(temp_dir)
+            routing_reference = None
+            if routing_matrix is not None:
+                routing = {
+                    "apiVersion": "simai.ascend.routing/v1alpha1",
+                    "kind": "HcclAllToAllVRouting",
+                    "schemaSemver": "0.1.0",
+                    "metadata": {"id": "synthetic-a2av-routing-r4-host"},
+                    "spec": {
+                        "profileDigest": profile_digest,
+                        "topologyDigest": "sha256:" + "1" * 64,
+                        "rankCount": 4,
+                        "countSemantics": "HCCL_SEND_COUNTS_BYTES",
+                        "unit": "B",
+                        "sendCounts": routing_matrix,
+                        "evidence": [
+                            {
+                                "id": "routing-input",
+                                "class": "USER_INPUT",
+                                "readiness": "FIELD_UNVERIFIED",
+                                "source": {
+                                    "uri": "fixture://issue-18/a2av-routing",
+                                    "ref": "worked-example-v1",
+                                },
+                                "method": {
+                                    "name": "synthetic-routing-matrix",
+                                    "version": "1",
+                                },
+                                "asOf": "2026-08-18T00:00:00+08:00",
+                                "conditions": {"hardwareAvailable": False},
+                                "sanitization": "synthetic-no-host-data",
+                            }
+                        ],
+                    },
+                }
+                routing_path = run_directory / "routing.json"
+                routing_path.write_text(json.dumps(routing, indent=2) + "\n")
+                routing_digest = "sha256:" + hashlib.sha256(
+                    routing_path.read_bytes()
+                ).hexdigest()
+                routing_reference = {
+                    "path": str(routing_path),
+                    "sha256": routing_digest,
+                }
+                raw["spec"]["payload"]["bytesPerRank"].pop("uniformValue")
+                raw["spec"]["payload"]["bytesPerRank"][
+                    "maximumValue"
+                ] = message_bytes
+                raw["spec"]["payload"]["routingDigest"] = routing_digest
+            raw_path = run_directory / "raw.json"
+            raw_path.write_text(json.dumps(raw, indent=2) + "\n")
+            raw_digest = "sha256:" + hashlib.sha256(raw_path.read_bytes()).hexdigest()
+            model = {
+                "apiVersion": "simai.ascend.costmodel/v1alpha1",
+                "kind": "HcclCostModel",
+                "schemaSemver": "0.1.0",
+                "metadata": {"id": f"synthetic-{collective.lower()}-model"},
+                "spec": {
+                    "profileDigest": profile_digest,
+                    "collective": collective,
+                    "dtype": "BF16",
+                    "reduction": reduction,
+                    "timingScope": "DEVICE_ONLY",
+                    "payloadSemantics": payload_semantics,
+                    "groupDomain": {
+                        "rankCounts": [4],
+                        "groupTypes": ["TP"],
+                        "scopes": ["HOST"],
+                        "topologyDigests": ["sha256:" + "1" * 64],
+                    },
+                    "messageDomainBytes": {
+                        "min": message_bytes,
+                        "max": message_bytes,
+                        "unit": "B",
+                    },
+                    "inputSamples": [
+                        {
+                            "id": raw["metadata"]["id"],
+                            "path": str(raw_path),
+                            "sha256": raw_digest,
+                        }
+                    ],
+                    "fit": {
+                        "family": "ALPHA_BETA",
+                        "formula": "round(startup_ns + message_B / bandwidth_Bps * 1000000000)",
+                        "startup": {"value": 20000, "unit": "ns"},
+                        "bandwidth": {"value": 25000000000, "unit": "B/s"},
+                        "interpolation": "NONE",
+                    },
+                    "traffic": {
+                        "algorithm": traffic_algorithm,
+                        "semantics": "ALGORITHM_TOTAL_GROUP_BYTES",
+                    },
+                    "evidenceClass": "DERIVED",
+                    "readiness": "FIELD_UNVERIFIED",
+                    "extrapolation": {"allowed": False, "policy": "FAIL"},
+                },
+            }
+            if routing_reference is not None:
+                model["spec"]["routingDigest"] = routing_reference["sha256"]
+            model_path = run_directory / "model.json"
+            model_path.write_text(json.dumps(model, indent=2) + "\n")
+            model_digest = "sha256:" + hashlib.sha256(
+                model_path.read_bytes()
+            ).hexdigest()
+            workload_path = run_directory / "workload.txt"
+            workload_path.write_text(
+                "HYBRID_TRANSFORMER model_parallel_NPU_group: 4 ep: 1 pp: 1 "
+                "vpp: 1 ga: 1 all_gpus: 4 checkpoints: 0 "
+                "checkpoint_initiates: 0 pp_comm 0\n"
+                "1\n"
+                f"generated_layer\t-1\t10\t{workload_token}\t{message_bytes}"
+                "\t10\tNONE\t0\t10\tNONE\t0\t10\n"
+            )
+            workload_digest = "sha256:" + hashlib.sha256(
+                workload_path.read_bytes()
+            ).hexdigest()
+            manifest = {
+                "schema_version": "simai.run/v1",
+                "run_id": f"generated-{collective.lower().replace('_', '-')}",
+                "backend": "analytical",
+                "workload": {
+                    "path": str(workload_path),
+                    "sha256": workload_digest,
+                },
+                "device_profile": {
+                    "path": str(profile_path),
+                    "sha256": profile_digest,
+                },
+                "collective_cost_model": {
+                    "path": str(model_path),
+                    "sha256": model_digest,
+                },
+            }
+            if routing_reference is not None and include_routing:
+                manifest["routing"] = routing_reference
+            manifest_path = run_directory / "run.json"
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+            result_path = run_directory / "result.json"
+            completed = subprocess.run(
+                [
+                    str(self.binary),
+                    "--run-manifest",
+                    str(manifest_path),
+                    "--result-manifest",
+                    str(result_path),
+                ],
+                cwd=run_directory,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+            result = json.loads(result_path.read_text())
+        return completed, result
+
+    def run_segmented_allgather_contract(self, runtime_message_bytes):
+        """Run one point against a two-segment, three-observation model."""
+        profile_path = FIXTURES / "minimal_ascend_profile.json"
+        profile_digest = "sha256:" + hashlib.sha256(
+            profile_path.read_bytes()
+        ).hexdigest()
+        model = json.loads(
+            (FIXTURES / "minimal_hccl_allgather_cost_model.json").read_text()
+        )
+        raw_template = json.loads(
+            (FIXTURES / "minimal_hccl_allgather_observation.json").read_text()
+        )
+        observations = {
+            4096: 10205,
+            65536: 13277,
+            1048576: 37853,
+        }
+
+        with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:
+            run_directory = self.prepare_run_directory(temp_dir)
+            input_samples = []
+            for message_bytes, duration_ns in observations.items():
+                raw = json.loads(json.dumps(raw_template))
+                raw_id = f"synthetic-hccl-ag-{message_bytes}-r4-host"
+                raw["metadata"]["id"] = raw_id
+                raw["spec"]["payload"]["bytesPerRank"][
+                    "uniformValue"
+                ] = message_bytes
+                raw["spec"]["normalized"]["averageTime"][
+                    "value"
+                ] = duration_ns
+                raw["spec"]["normalized"]["algBandwidth"][
+                    "value"
+                ] = message_bytes * 1000000000 / duration_ns
+                raw_path = run_directory / f"raw-{message_bytes}.json"
+                raw_path.write_text(json.dumps(raw, indent=2) + "\n")
+                input_samples.append(
+                    {
+                        "id": raw_id,
+                        "path": str(raw_path),
+                        "sha256": "sha256:"
+                        + hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+                    }
+                )
+
+            model["spec"]["profileDigest"] = profile_digest
+            model["spec"]["messageDomainBytes"] = {
+                "min": 4096,
+                "max": 1048576,
+                "unit": "B",
+            }
+            model["spec"]["inputSamples"] = input_samples
+            model["spec"]["fit"] = {
+                "family": "PIECEWISE_ALPHA_BETA",
+                "formula": "round(startup_ns + message_B / bandwidth_Bps * 1000000000)",
+                "interpolation": "SEGMENT_LOCAL",
+                "segments": [
+                    {
+                        "min": 4096,
+                        "max": 65536,
+                        "upperBound": "EXCLUSIVE",
+                        "startup": {"value": 10000, "unit": "ns"},
+                        "bandwidth": {"value": 20000000000, "unit": "B/s"},
+                    },
+                    {
+                        "min": 65536,
+                        "max": 1048576,
+                        "upperBound": "INCLUSIVE",
+                        "startup": {"value": 11639, "unit": "ns"},
+                        "bandwidth": {"value": 40000000000, "unit": "B/s"},
+                    },
+                ],
+            }
+            model_path = run_directory / "model.json"
+            model_path.write_text(json.dumps(model, indent=2) + "\n")
+            model_digest = "sha256:" + hashlib.sha256(
+                model_path.read_bytes()
+            ).hexdigest()
+            workload_path = run_directory / "workload.txt"
+            workload_path.write_text(
+                "HYBRID_TRANSFORMER model_parallel_NPU_group: 4 ep: 1 pp: 1 "
+                "vpp: 1 ga: 1 all_gpus: 4 checkpoints: 0 "
+                "checkpoint_initiates: 0 pp_comm 0\n"
+                "1\n"
+                f"segmented_ag\t-1\t10\tALLGATHER\t{runtime_message_bytes}"
+                "\t10\tNONE\t0\t10\tNONE\t0\t10\n"
+            )
+            manifest = {
+                "schema_version": "simai.run/v1",
+                "run_id": f"segmented-ag-{runtime_message_bytes}",
+                "backend": "analytical",
+                "workload": {
+                    "path": str(workload_path),
+                    "sha256": "sha256:"
+                    + hashlib.sha256(workload_path.read_bytes()).hexdigest(),
+                },
+                "device_profile": {
+                    "path": str(profile_path),
+                    "sha256": profile_digest,
+                },
+                "collective_cost_model": {
+                    "path": str(model_path),
+                    "sha256": model_digest,
+                },
+            }
+            manifest_path = run_directory / "run.json"
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+            result_path = run_directory / "result.json"
+            completed = subprocess.run(
+                [
+                    str(self.binary),
+                    "--run-manifest",
+                    str(manifest_path),
+                    "--result-manifest",
+                    str(result_path),
+                ],
+                cwd=run_directory,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+            result = json.loads(result_path.read_text())
+        return completed, result
+
+    @staticmethod
+    def use_explicit_legacy_busbw_adapter(model):
+        """Replace direct algbw with an explicit, typed legacy busbw adapter."""
+        fit = model["spec"]["fit"]
+        fit["family"] = "LEGACY_BUSBW_ADAPTER"
+        fit.pop("bandwidth")
+        fit["adapter"] = {
+            "schema": "simai.legacy.busbw/v1",
+            "columns": [
+                "collective",
+                "message_B",
+                "rank_count",
+                "bus_bandwidth_Bps",
+            ],
+            "collective": "ALL_REDUCE",
+            "messageDomainBytes": {
+                "min": 1048576,
+                "max": 1048576,
+                "unit": "B",
+            },
+            "rankCount": 4,
+            "busBandwidth": {"value": 37500000000, "unit": "B/s"},
+            "conversion": "HCCL_RING_BUSBW_TO_ALGBW",
+        }
+
     def test_minimal_legacy_gpu_manifest_runs_real_analytical_process(self):
         completed, result, manifest_path = self.run_contract(
             "minimal_legacy_gpu_run.json"
@@ -267,7 +654,256 @@ class AnalyticalRunContractTest(unittest.TestCase):
         self.assertEqual(result["readiness"]["contract"], "READY")
         self.assertEqual(result["readiness"]["ascend_profile"], "READY")
         self.assertEqual(result["readiness"]["hccl_cost_model"], "READY")
+        self.assertEqual(result["readiness"]["topology"], "READY")
+        self.assertEqual(result["readiness"]["routing"], "NOT_REQUIRED")
         self.assertEqual(result["readiness"]["traffic"], "READY")
+
+    def test_minimal_ascend_allgather_returns_canonical_payload_and_cost(self):
+        completed, result, _ = self.run_contract(
+            "minimal_ascend_allgather_run.json"
+        )
+
+        self.assertEqual(
+            completed.returncode,
+            0,
+            msg=f"stdout:\n{completed.stdout[-2000:]}\nstderr:\n{completed.stderr[-2000:]}",
+        )
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(result["reject_code"], "NONE")
+        self.assertEqual(result["results"]["timing_ns"], 61943)
+        self.assertEqual(result["results"]["traffic_B"], 12582912)
+        self.assertEqual(
+            result["results"]["collective"],
+            {
+                "operation": "ALL_GATHER",
+                "message_bytes_per_rank": 1048576,
+                "rank_count": 4,
+                "group_type": "TP",
+                "topology_domain": "HOST",
+            },
+        )
+        self.assertEqual(
+            result["results"]["collective_payload"],
+            {
+                "semantics": "HCCL_ALLGATHER_SEND_BYTES",
+                "input_B_per_rank": 1048576,
+                "output_B_per_rank": 4194304,
+                "routing_sha256": "NOT_REQUIRED",
+            },
+        )
+
+    def test_reduce_scatter_returns_canonical_payload_and_cost(self):
+        completed, result = self.run_generated_hccl_contract(
+            collective="REDUCE_SCATTER",
+            workload_token="REDUCESCATTER",
+            payload_semantics="HCCL_REDUCESCATTER_INPUT_BYTES",
+            reduction="SUM",
+            traffic_algorithm="RING_REDUCE_SCATTER",
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(result["results"]["timing_ns"], 61943)
+        self.assertEqual(result["results"]["traffic_B"], 3145728)
+        self.assertEqual(result["results"]["collective"]["operation"], "REDUCE_SCATTER")
+        self.assertEqual(
+            result["results"]["collective_payload"],
+            {
+                "semantics": "HCCL_REDUCESCATTER_INPUT_BYTES",
+                "input_B_per_rank": 1048576,
+                "output_B_per_rank": 262144,
+                "routing_sha256": "NOT_REQUIRED",
+            },
+        )
+
+    def test_uniform_alltoall_returns_canonical_payload_and_cost(self):
+        completed, result = self.run_generated_hccl_contract(
+            collective="ALL_TO_ALL",
+            workload_token="ALLTOALL",
+            payload_semantics="HCCL_ALLTOALL_TOTAL_SEND_BYTES",
+            reduction="NONE",
+            traffic_algorithm="UNIFORM_DIRECT_EXCHANGE",
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(result["results"]["timing_ns"], 61943)
+        self.assertEqual(result["results"]["traffic_B"], 3145728)
+        self.assertEqual(result["results"]["collective"]["operation"], "ALL_TO_ALL")
+        self.assertEqual(
+            result["results"]["collective_payload"],
+            {
+                "semantics": "HCCL_ALLTOALL_TOTAL_SEND_BYTES",
+                "input_B_per_rank": 1048576,
+                "output_B_per_rank": 1048576,
+                "routing_sha256": "NOT_REQUIRED",
+            },
+        )
+
+    def test_alltoallv_uses_routing_counts_for_payload_and_traffic(self):
+        completed, result = self.run_generated_hccl_contract(
+            collective="ALL_TO_ALL_V",
+            workload_token="ALLTOALLV",
+            payload_semantics="HCCL_ALLTOALLV_COUNTS_MATRIX",
+            reduction="NONE",
+            traffic_algorithm="VARIABLE_DIRECT_EXCHANGE",
+            message_bytes=750000,
+            routing_matrix=[
+                [0, 100000, 200000, 300000],
+                [150000, 0, 250000, 350000],
+                [175000, 225000, 0, 275000],
+                [325000, 125000, 225000, 0],
+            ],
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(result["results"]["timing_ns"], 50000)
+        self.assertEqual(result["results"]["traffic_B"], 2700000)
+        self.assertEqual(result["results"]["collective"]["operation"], "ALL_TO_ALL_V")
+        payload = result["results"]["collective_payload"]
+        self.assertEqual(payload["semantics"], "HCCL_ALLTOALLV_COUNTS_MATRIX")
+        self.assertEqual(payload["input_B_per_rank"], 750000)
+        self.assertEqual(payload["output_B_per_rank"], 925000)
+        self.assertRegex(payload["routing_sha256"], SHA256_ID)
+        self.assertEqual(
+            payload["routing_sha256"], result["provenance"]["routing_sha256"]
+        )
+        self.assertEqual(result["readiness"]["routing"], "READY")
+
+    def test_alltoallv_without_routing_is_unknown_and_never_falls_back(self):
+        completed, result = self.run_generated_hccl_contract(
+            collective="ALL_TO_ALL_V",
+            workload_token="ALLTOALLV",
+            payload_semantics="HCCL_ALLTOALLV_COUNTS_MATRIX",
+            reduction="NONE",
+            traffic_algorithm="VARIABLE_DIRECT_EXCHANGE",
+            message_bytes=750000,
+            routing_matrix=[
+                [0, 100000, 200000, 300000],
+                [150000, 0, 250000, 350000],
+                [175000, 225000, 0, 275000],
+                [325000, 125000, 225000, 0],
+            ],
+            include_routing=False,
+        )
+
+        self.assertEqual(completed.returncode, 3)
+        self.assertEqual(result["status"], "UNSUPPORTED")
+        self.assertEqual(result["reject_code"], "HCCL_ROUTING_REQUIRED")
+        self.assertEqual(result["readiness"]["routing"], "UNKNOWN")
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+        self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
+
+    def test_segmented_known_points_boundaries_and_monotonicity(self):
+        expected = {
+            4096: 10205,
+            65535: 13277,
+            65536: 13277,
+            1048576: 37853,
+        }
+        observed = []
+        for message_bytes, expected_duration in expected.items():
+            with self.subTest(message_bytes=message_bytes):
+                completed, result = self.run_segmented_allgather_contract(
+                    message_bytes
+                )
+                self.assertEqual(completed.returncode, 0)
+                self.assertEqual(result["status"], "VALID")
+                self.assertEqual(
+                    result["results"]["timing_ns"], expected_duration
+                )
+                observed.append(result["results"]["timing_ns"])
+        self.assertEqual(observed, sorted(observed))
+
+    def test_explicit_legacy_busbw_adapter_converts_to_canonical_algbw(self):
+        completed, result = self.run_mutated_ascend_contract(
+            mutate_model=self.use_explicit_legacy_busbw_adapter
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(result["reject_code"], "NONE")
+        self.assertEqual(result["results"]["timing_ns"], 61943)
+        self.assertEqual(result["results"]["traffic_B"], 6291456)
+        self.assertEqual(result["provenance"]["cost_model"], "HCCL_DERIVED")
+        self.assertEqual(
+            result["provenance"]["cost_model_adapter"],
+            "EXPLICIT_LEGACY_BUSBW",
+        )
+
+    def test_legacy_busbw_without_explicit_adapter_is_rejected(self):
+        def remove_adapter(model):
+            self.use_explicit_legacy_busbw_adapter(model)
+            model["spec"]["fit"].pop("adapter")
+
+        completed, result = self.run_mutated_ascend_contract(
+            mutate_model=remove_adapter
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(result["reject_code"], "LEGACY_BUSBW_ADAPTER_REQUIRED")
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+
+    def test_legacy_busbw_missing_column_is_rejected(self):
+        def remove_bandwidth_column(model):
+            self.use_explicit_legacy_busbw_adapter(model)
+            model["spec"]["fit"]["adapter"]["columns"].remove(
+                "bus_bandwidth_Bps"
+            )
+
+        completed, result = self.run_mutated_ascend_contract(
+            mutate_model=remove_bandwidth_column
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(result["reject_code"], "LEGACY_BUSBW_COLUMN_MISSING")
+        self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
+
+    def test_legacy_busbw_ambiguous_unit_is_rejected(self):
+        def use_ambiguous_bandwidth_unit(model):
+            self.use_explicit_legacy_busbw_adapter(model)
+            model["spec"]["fit"]["adapter"]["busBandwidth"]["unit"] = "GB/s"
+
+        completed, result = self.run_mutated_ascend_contract(
+            mutate_model=use_ambiguous_bandwidth_unit
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(result["reject_code"], "LEGACY_BUSBW_UNIT_AMBIGUOUS")
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+
+    def test_legacy_busbw_out_of_domain_row_is_rejected(self):
+        def use_mismatched_message_domain(model):
+            self.use_explicit_legacy_busbw_adapter(model)
+            model["spec"]["fit"]["adapter"]["messageDomainBytes"][
+                "min"
+            ] = 524288
+
+        completed, result = self.run_mutated_ascend_contract(
+            mutate_model=use_mismatched_message_domain
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(result["reject_code"], "LEGACY_BUSBW_DOMAIN_MISMATCH")
+        self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
+
+    def test_missing_topology_is_distinct_unknown_and_never_falls_back(self):
+        completed, result = self.run_mutated_ascend_contract(
+            mutate_profile=lambda profile: profile["spec"].pop("topology")
+        )
+
+        self.assertEqual(completed.returncode, 3)
+        self.assertEqual(result["status"], "UNSUPPORTED")
+        self.assertEqual(result["reject_code"], "HCCL_TOPOLOGY_REQUIRED")
+        self.assertEqual(result["readiness"]["topology"], "UNKNOWN")
+        self.assertEqual(result["readiness"]["routing"], "NOT_REQUIRED")
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+        self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
 
     def test_hccl_model_without_ascend_profile_fails_closed(self):
         completed, result, _ = self.run_contract(
@@ -298,6 +934,8 @@ class AnalyticalRunContractTest(unittest.TestCase):
         self.assertEqual(result["readiness"]["contract"], "BLOCKED")
         self.assertEqual(result["readiness"]["ascend_profile"], "BLOCKED")
         self.assertEqual(result["readiness"]["hccl_cost_model"], "BLOCKED")
+        self.assertEqual(result["readiness"]["topology"], "READY")
+        self.assertEqual(result["readiness"]["routing"], "NOT_REQUIRED")
 
     def test_ascend_collective_outside_model_domain_never_falls_back(self):
         completed, result, _ = self.run_contract(

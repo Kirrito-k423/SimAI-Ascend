@@ -888,6 +888,8 @@ char* comtype_to_coll(ComType comtype) {
             return "allreduce";
         case ComType::All_to_All:
             return "alltoall";
+        case ComType::All_to_Allv:
+            return "alltoallv";
         case ComType::All_Reduce_All_to_All:
             return "all_reduce_all_to_all";
         case ComType::All_Reduce_NVLS:
@@ -956,6 +958,18 @@ Tick Layer::compute_time(
     switch (comtype) {
       case ComType::All_Reduce:
         request.collective = CostedCollective::AllReduce;
+        break;
+      case ComType::All_Gather:
+        request.collective = CostedCollective::AllGather;
+        break;
+      case ComType::Reduce_Scatter:
+        request.collective = CostedCollective::ReduceScatter;
+        break;
+      case ComType::All_to_All:
+        request.collective = CostedCollective::AllToAll;
+        break;
+      case ComType::All_to_Allv:
+        request.collective = CostedCollective::AllToAllV;
         break;
       default:
         request.collective = CostedCollective::Unsupported;

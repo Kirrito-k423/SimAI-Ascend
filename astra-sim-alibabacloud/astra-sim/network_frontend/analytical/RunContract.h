@@ -45,6 +45,12 @@ struct AnalyticalRunContract {
   std::string device_profile_sha256 = "UNKNOWN";
   std::string cost_model_sha256 = "UNKNOWN";
   std::string raw_observation_sha256 = "UNKNOWN";
+  std::string routing_sha256 = "UNKNOWN";
+  std::string routing_evidence_level = "UNKNOWN";
+  std::string routing_field_readiness = "UNKNOWN";
+  bool routing_required = false;
+  std::string topology_readiness = "UNKNOWN";
+  bool topology_required = false;
   bool device_profile_present = false;
   bool ascend_profiled = false;
   int ascend_rank_count = 0;

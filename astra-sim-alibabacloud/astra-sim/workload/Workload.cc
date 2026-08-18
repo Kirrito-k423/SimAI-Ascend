@@ -1326,6 +1326,17 @@ bool Workload::initialize_workload(std::string name) {
       } else{
         wg_group_type = MockNccl::GroupType::NONE;
       }
+    } else if (wg_comm_type_s.substr(0,9) == "ALLTOALLV") {
+      wg_type = ComType::All_to_Allv;
+      if(wg_comm_type_s == "ALLTOALLV"){
+        wg_group_type = MockNccl::GroupType::DP;
+      } else if(wg_comm_type_s == "ALLTOALLV_EP"){
+        wg_group_type = MockNccl::GroupType::EP;
+      } else if(wg_comm_type_s == "ALLTOALLV_DP_EP"){
+        wg_group_type = MockNccl::GroupType::DP_EP;
+      } else{
+        wg_group_type = MockNccl::GroupType::NONE;
+      }
     } else if (wg_comm_type_s.substr(0,8) == "ALLTOALL") {
       wg_type = ComType::All_to_All;
       if(wg_comm_type_s == "ALLTOALL"){
@@ -1385,6 +1396,17 @@ bool Workload::initialize_workload(std::string name) {
       } else{
         ig_group_type = MockNccl::GroupType::NONE;
       }
+    } else if (ig_comm_type_s.substr(0,9) == "ALLTOALLV") {
+      ig_type = ComType::All_to_Allv;
+      if(ig_comm_type_s == "ALLTOALLV"){
+        ig_group_type = MockNccl::GroupType::TP;
+      } else if(ig_comm_type_s == "ALLTOALLV_EP"){
+        ig_group_type = MockNccl::GroupType::EP;
+      } else if(ig_comm_type_s == "ALLTOALLV_DP_EP"){
+        ig_group_type = MockNccl::GroupType::DP_EP;
+      } else{
+        ig_group_type = MockNccl::GroupType::NONE;
+      }
     } else if (ig_comm_type_s.substr(0,8) == "ALLTOALL") {
       ig_type = ComType::All_to_All;
       if(ig_comm_type_s == "ALLTOALL"){
@@ -1438,6 +1460,17 @@ bool Workload::initialize_workload(std::string name) {
       } else if(fp_comm_type_s == "ALLREDUCE_EP"){
         fp_group_type = MockNccl::GroupType::EP;
       } else if(fp_comm_type_s == "ALLREDUCE_DP_EP"){
+        fp_group_type = MockNccl::GroupType::DP_EP;
+      } else{
+        fp_group_type = MockNccl::GroupType::NONE;
+      }
+    } else if (fp_comm_type_s.substr(0,9) == "ALLTOALLV") {
+      fp_type = ComType::All_to_Allv;
+      if(fp_comm_type_s == "ALLTOALLV"){
+        fp_group_type = MockNccl::GroupType::TP;
+      } else if(fp_comm_type_s == "ALLTOALLV_EP"){
+        fp_group_type = MockNccl::GroupType::EP;
+      } else if(fp_comm_type_s == "ALLTOALLV_DP_EP"){
         fp_group_type = MockNccl::GroupType::DP_EP;
       } else{
         fp_group_type = MockNccl::GroupType::NONE;

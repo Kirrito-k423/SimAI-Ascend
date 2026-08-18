@@ -1,0 +1,17 @@
+{
+  "schema_version": "simai.run/v1",
+  "run_id": "ascend-allgather-minimal",
+  "backend": "analytical",
+  "workload": {
+    "path": "tests/contract/fixtures/ascend_allgather_workload.txt",
+    "sha256": "sha256:ee0f54c593307cc207b3b1da311cd5701abc3d78254a56c1fe9aa76daa335e98"
+  },
+  "device_profile": {
+    "path": "tests/contract/fixtures/minimal_ascend_profile.json",
+    "sha256": "sha256:78f97d9472b229f6a8dc835f41b7ac4e4554d1c5b0e89bde396484013f51f6ef"
+  },
+  "collective_cost_model": {
+    "path": "tests/contract/fixtures/minimal_hccl_allgather_cost_model.json",
+    "sha256": "sha256:47f4c1db921c5f353f6c8762cf22d5b225243a557be4393e414f318d0a084975"
+  }
+}

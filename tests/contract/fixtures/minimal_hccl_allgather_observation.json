@@ -1,0 +1,74 @@
+{
+  "apiVersion": "simai.ascend.observation/v1alpha1",
+  "kind": "HcclRawSample",
+  "schemaSemver": "0.1.0",
+  "metadata": {
+    "id": "synthetic-hccl-ag-1mib-r4-host"
+  },
+  "spec": {
+    "profileRef": "synthetic-a2-four-rank-host",
+    "profileDigest": "sha256:78f97d9472b229f6a8dc835f41b7ac4e4554d1c5b0e89bde396484013f51f6ef",
+    "collective": "ALL_GATHER",
+    "group": {
+      "rankCount": 4,
+      "scope": "HOST",
+      "groupType": "TP",
+      "topologyDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "algorithm": {
+      "name": "RING_ALL_GATHER",
+      "version": "synthetic-v1"
+    },
+    "payload": {
+      "bytesPerRank": {
+        "semantics": "HCCL_ALLGATHER_SEND_BYTES",
+        "uniformValue": 1048576,
+        "unit": "B"
+      },
+      "dtype": "BF16",
+      "reduction": "NONE"
+    },
+    "statistics": {
+      "timingStatistic": "ARITHMETIC_MEAN",
+      "sampleCount": 5,
+      "warmupExcluded": true
+    },
+    "normalized": {
+      "averageTime": {
+        "value": 61943,
+        "unit": "ns"
+      },
+      "algBandwidth": {
+        "value": 16928014594,
+        "unit": "B/s"
+      }
+    },
+    "correctness": {
+      "status": "PASS"
+    },
+    "eligibility": {
+      "fit": true,
+      "reasons": []
+    },
+    "evidence": [
+      {
+        "id": "worked-example-input",
+        "class": "USER_INPUT",
+        "readiness": "FIELD_UNVERIFIED",
+        "source": {
+          "uri": "fixture://issue-18/hccl-allgather",
+          "ref": "worked-example-v1"
+        },
+        "method": {
+          "name": "alpha-beta-worked-example",
+          "version": "1"
+        },
+        "asOf": "2026-08-18T00:00:00+08:00",
+        "conditions": {
+          "hardwareAvailable": false
+        },
+        "sanitization": "synthetic-no-host-data"
+      }
+    ]
+  }
+}

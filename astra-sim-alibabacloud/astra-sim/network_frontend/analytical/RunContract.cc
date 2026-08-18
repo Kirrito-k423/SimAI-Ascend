@@ -5,6 +5,7 @@
 
 #include "RunContract.h"
 
+#include <algorithm>
 #include <array>
 #include <climits>
 #include <cmath>
@@ -962,6 +963,15 @@ bool ValidateAscendProfile(
   const JsonValue* first_evidence =
       spec == nullptr ? nullptr : FirstArrayObject(*spec, "evidence");
 
+  if (spec != nullptr && topology_level == nullptr) {
+    RejectUnsupported(
+        contract,
+        "HCCL_TOPOLOGY_REQUIRED",
+        "Ascend Analytical requires an explicit topology domain.",
+        "Provide Profile spec.topology.levels with rank count and digest.");
+    return false;
+  }
+
   std::string status;
   std::string vendor;
   std::string generation;
@@ -1074,12 +1084,304 @@ struct ValidatedHcclCostModel {
   HcclCostModelConfig config;
   JsonValue raw_reference;
   std::string input_sample_id;
+  std::vector<JsonValue> raw_references;
+  std::vector<std::string> input_sample_ids;
   std::string collective;
   std::string dtype;
   std::string reduction;
   std::string evidence_level;
   std::string field_readiness;
+  std::string routing_digest;
 };
+
+bool SupportedCollective(const std::string& collective) {
+  return collective == "ALL_REDUCE" || collective == "ALL_GATHER" ||
+      collective == "REDUCE_SCATTER" || collective == "ALL_TO_ALL" ||
+      collective == "ALL_TO_ALL_V";
+}
+
+std::string ExpectedReduction(const std::string& collective) {
+  return collective == "ALL_REDUCE" || collective == "REDUCE_SCATTER"
+      ? "SUM"
+      : "NONE";
+}
+
+std::string ExpectedPayloadSemantics(const std::string& collective) {
+  if (collective == "ALL_REDUCE") {
+    return "HCCL_ALLREDUCE_IN_PLACE_BUFFER_BYTES";
+  }
+  if (collective == "ALL_GATHER") {
+    return "HCCL_ALLGATHER_SEND_BYTES";
+  }
+  if (collective == "REDUCE_SCATTER") {
+    return "HCCL_REDUCESCATTER_INPUT_BYTES";
+  }
+  if (collective == "ALL_TO_ALL") {
+    return "HCCL_ALLTOALL_TOTAL_SEND_BYTES";
+  }
+  if (collective == "ALL_TO_ALL_V") {
+    return "HCCL_ALLTOALLV_COUNTS_MATRIX";
+  }
+  return "UNKNOWN";
+}
+
+std::string ExpectedTrafficAlgorithm(const std::string& collective) {
+  if (collective == "ALL_REDUCE") {
+    return "RING";
+  }
+  if (collective == "ALL_GATHER") {
+    return "RING_ALL_GATHER";
+  }
+  if (collective == "REDUCE_SCATTER") {
+    return "RING_REDUCE_SCATTER";
+  }
+  if (collective == "ALL_TO_ALL") {
+    return "UNIFORM_DIRECT_EXCHANGE";
+  }
+  if (collective == "ALL_TO_ALL_V") {
+    return "VARIABLE_DIRECT_EXCHANGE";
+  }
+  return "UNKNOWN";
+}
+
+bool ParseLegacyBusbwAdapter(
+    const JsonValue& fit,
+    const JsonValue& spec,
+    AnalyticalRunContract* contract,
+    HcclCostModelConfig* config) {
+  const JsonValue* adapter = Member(fit, "adapter");
+  if (adapter == nullptr) {
+    Reject(
+        contract,
+        "LEGACY_BUSBW_ADAPTER_REQUIRED",
+        "Legacy bus bandwidth is accepted only through an explicit adapter.",
+        "Provide fit.adapter using simai.legacy.busbw/v1.");
+    return false;
+  }
+
+  const JsonValue* columns = Member(*adapter, "columns");
+  const std::vector<std::string> required_columns = {
+      "collective", "message_B", "rank_count", "bus_bandwidth_Bps"};
+  if (columns == nullptr || columns->type != JsonValue::Type::Array) {
+    Reject(
+        contract,
+        "LEGACY_BUSBW_COLUMN_MISSING",
+        "The legacy bus bandwidth adapter has no typed column declaration.",
+        "Declare collective, message_B, rank_count, and bus_bandwidth_Bps.");
+    return false;
+  }
+  std::vector<std::string> declared_columns;
+  for (const JsonValue& column : columns->array) {
+    if (column.type != JsonValue::Type::String ||
+        std::find(
+            declared_columns.begin(),
+            declared_columns.end(),
+            column.string) != declared_columns.end()) {
+      Reject(
+          contract,
+          "LEGACY_BUSBW_ADAPTER_INVALID",
+          "The legacy bus bandwidth column declaration is ambiguous.",
+          "Declare each required typed column exactly once.");
+      return false;
+    }
+    declared_columns.push_back(column.string);
+  }
+  for (const std::string& column : required_columns) {
+    if (std::find(
+            declared_columns.begin(), declared_columns.end(), column) ==
+        declared_columns.end()) {
+      Reject(
+          contract,
+          "LEGACY_BUSBW_COLUMN_MISSING",
+          "A required legacy bus bandwidth column is missing.",
+          "Declare collective, message_B, rank_count, and bus_bandwidth_Bps.");
+      return false;
+    }
+  }
+  if (declared_columns.size() != required_columns.size() ||
+      Member(fit, "bandwidth") != nullptr) {
+    Reject(
+        contract,
+        "LEGACY_BUSBW_ADAPTER_INVALID",
+        "The legacy bus bandwidth source is ambiguous.",
+        "Use only the four declared adapter columns and no direct algbw.");
+    return false;
+  }
+
+  const JsonValue* adapter_domain = Member(*adapter, "messageDomainBytes");
+  const JsonValue* model_domain = Member(spec, "messageDomainBytes");
+  const JsonValue* group_domain = Member(spec, "groupDomain");
+  const JsonValue* bus_bandwidth = Member(*adapter, "busBandwidth");
+  std::string schema;
+  std::string conversion;
+  std::string adapter_collective;
+  std::string model_collective;
+  std::string adapter_unit;
+  std::string adapter_domain_unit;
+  std::string model_domain_unit;
+  int adapter_rank_count = 0;
+  int model_rank_count = 0;
+  uint64_t adapter_minimum = 0;
+  uint64_t adapter_maximum = 0;
+  uint64_t model_minimum = 0;
+  uint64_t model_maximum = 0;
+  double bus_bandwidth_Bps = 0.0;
+  if (!StringMember(*adapter, "schema", &schema) ||
+      schema != "simai.legacy.busbw/v1" ||
+      !StringMember(*adapter, "conversion", &conversion) ||
+      conversion != "HCCL_RING_BUSBW_TO_ALGBW" ||
+      !StringMember(*adapter, "collective", &adapter_collective) ||
+      !StringMember(spec, "collective", &model_collective) ||
+      !PositiveIntMember(*adapter, "rankCount", &adapter_rank_count) ||
+      group_domain == nullptr ||
+      !FirstArrayPositiveInt(
+          *group_domain, "rankCounts", &model_rank_count) ||
+      adapter_domain == nullptr || model_domain == nullptr ||
+      !PositiveUint64Member(
+          *adapter_domain, "min", &adapter_minimum) ||
+      !PositiveUint64Member(
+          *adapter_domain, "max", &adapter_maximum) ||
+      !PositiveUint64Member(*model_domain, "min", &model_minimum) ||
+      !PositiveUint64Member(*model_domain, "max", &model_maximum) ||
+      !StringMember(*adapter_domain, "unit", &adapter_domain_unit) ||
+      !StringMember(*model_domain, "unit", &model_domain_unit) ||
+      bus_bandwidth == nullptr ||
+      !NumberMember(
+          *bus_bandwidth, "value", &bus_bandwidth_Bps) ||
+      bus_bandwidth_Bps <= 0.0 ||
+      !StringMember(*bus_bandwidth, "unit", &adapter_unit)) {
+    Reject(
+        contract,
+        "LEGACY_BUSBW_ADAPTER_INVALID",
+        "The explicit legacy bus bandwidth adapter is malformed.",
+        "Use the documented typed adapter schema and conversion.");
+    return false;
+  }
+  if (adapter_unit != "B/s" || adapter_domain_unit != "B" ||
+      model_domain_unit != "B") {
+    Reject(
+        contract,
+        "LEGACY_BUSBW_UNIT_AMBIGUOUS",
+        "The legacy bus bandwidth adapter uses ambiguous units.",
+        "Use message bytes (B) and bus bandwidth bytes per second (B/s).");
+    return false;
+  }
+  if (adapter_collective != model_collective ||
+      adapter_rank_count != model_rank_count ||
+      adapter_minimum != model_minimum || adapter_maximum != model_maximum) {
+    Reject(
+        contract,
+        "LEGACY_BUSBW_DOMAIN_MISMATCH",
+        "The legacy bus bandwidth row is outside the model domain.",
+        "Match collective, rank count, and exact message-byte domain.");
+    return false;
+  }
+  if (adapter_rank_count < 2 || model_collective == "ALL_TO_ALL_V") {
+    Reject(
+        contract,
+        "LEGACY_BUSBW_ADAPTER_INVALID",
+        "The legacy bus bandwidth conversion is undefined for this domain.",
+        "Use a fixed-size HCCL collective with at least two ranks.");
+    return false;
+  }
+
+  const double rank_count = static_cast<double>(adapter_rank_count);
+  const double ring_denominator = rank_count - 1.0;
+  config->bandwidth_Bps = model_collective == "ALL_REDUCE"
+      ? bus_bandwidth_Bps * rank_count / (2.0 * ring_denominator)
+      : bus_bandwidth_Bps * rank_count / ring_denominator;
+  if (!std::isfinite(config->bandwidth_Bps) ||
+      config->bandwidth_Bps <= 0.0) {
+    Reject(
+        contract,
+        "LEGACY_BUSBW_ADAPTER_INVALID",
+        "The legacy bus bandwidth conversion is not finite.",
+        "Use a finite positive bus bandwidth in B/s.");
+    return false;
+  }
+  config->source_adapter = "EXPLICIT_LEGACY_BUSBW";
+  return true;
+}
+
+bool ParsePiecewiseSegments(
+    const JsonValue& fit,
+    uint64_t model_minimum,
+    uint64_t model_maximum,
+    std::vector<HcclCostSegment>* parsed) {
+  const JsonValue* segments = Member(fit, "segments");
+  if (segments == nullptr || segments->type != JsonValue::Type::Array ||
+      segments->array.size() < 2U) {
+    return false;
+  }
+  parsed->clear();
+  for (size_t index = 0; index < segments->array.size(); ++index) {
+    const JsonValue& value = segments->array[index];
+    const JsonValue* startup = Member(value, "startup");
+    const JsonValue* bandwidth = Member(value, "bandwidth");
+    HcclCostSegment segment;
+    std::string upper_bound;
+    std::string startup_unit;
+    std::string bandwidth_unit;
+    if (value.type != JsonValue::Type::Object || startup == nullptr ||
+        bandwidth == nullptr ||
+        !PositiveUint64Member(
+            value, "min", &segment.minimum_message_bytes) ||
+        !PositiveUint64Member(
+            value, "max", &segment.maximum_message_bytes) ||
+        segment.minimum_message_bytes >= segment.maximum_message_bytes ||
+        !StringMember(value, "upperBound", &upper_bound) ||
+        !PositiveUint64Member(*startup, "value", &segment.startup_ns) ||
+        !StringMember(*startup, "unit", &startup_unit) ||
+        startup_unit != "ns" ||
+        !NumberMember(*bandwidth, "value", &segment.bandwidth_Bps) ||
+        segment.bandwidth_Bps <= 0.0 ||
+        !StringMember(*bandwidth, "unit", &bandwidth_unit) ||
+        bandwidth_unit != "B/s") {
+      return false;
+    }
+    const bool is_last = index + 1U == segments->array.size();
+    if ((!is_last && upper_bound != "EXCLUSIVE") ||
+        (is_last && upper_bound != "INCLUSIVE")) {
+      return false;
+    }
+    segment.maximum_inclusive = is_last;
+    if ((index == 0U && segment.minimum_message_bytes != model_minimum) ||
+        (is_last && segment.maximum_message_bytes != model_maximum) ||
+        (!parsed->empty() &&
+         parsed->back().maximum_message_bytes !=
+             segment.minimum_message_bytes)) {
+      return false;
+    }
+    if (!parsed->empty()) {
+      const HcclCostSegment& previous = parsed->back();
+      const double boundary =
+          static_cast<double>(segment.minimum_message_bytes);
+      const double previous_duration =
+          static_cast<double>(previous.startup_ns) +
+          boundary * 1000000000.0 / previous.bandwidth_Bps;
+      const double current_duration =
+          static_cast<double>(segment.startup_ns) +
+          boundary * 1000000000.0 / segment.bandwidth_Bps;
+      if (!std::isfinite(previous_duration) ||
+          !std::isfinite(current_duration) ||
+          std::fabs(previous_duration - current_duration) > 1.0) {
+        return false;
+      }
+    }
+    const double maximum_duration =
+        static_cast<double>(segment.startup_ns) +
+        static_cast<double>(segment.maximum_message_bytes) * 1000000000.0 /
+            segment.bandwidth_Bps;
+    const double llround_upper_exclusive = std::ldexp(
+        1.0, std::numeric_limits<long long>::digits);
+    if (!std::isfinite(maximum_duration) || maximum_duration < 0.0 ||
+        maximum_duration >= llround_upper_exclusive) {
+      return false;
+    }
+    parsed->push_back(segment);
+  }
+  return true;
+}
 
 bool ValidateHcclCostModel(
     const JsonValue& model,
@@ -1122,6 +1424,7 @@ bool ValidateHcclCostModel(
   std::string bandwidth_unit;
   std::string traffic_algorithm;
   std::string traffic_semantics;
+  std::string payload_semantics;
   int rank_count = 0;
   bool extrapolation_allowed = true;
   const std::string supported_formula =
@@ -1134,6 +1437,12 @@ bool ValidateHcclCostModel(
         "HCCL_COST_MODEL_FORMULA_INVALID",
         "The HCCL cost model formula is missing or unsupported.",
         "Use the exact documented ALPHA_BETA nanosecond formula.");
+    return false;
+  }
+  if (fit != nullptr && StringMember(*fit, "family", &family) &&
+      family == "LEGACY_BUSBW_ADAPTER" && spec != nullptr &&
+      !ParseLegacyBusbwAdapter(
+          *fit, *spec, contract, &validated->config)) {
     return false;
   }
   std::string declared_readiness;
@@ -1158,11 +1467,18 @@ bool ValidateHcclCostModel(
       !StringMember(*spec, "profileDigest", &model_profile_digest) ||
       model_profile_digest != profile_digest ||
       !StringMember(*spec, "collective", &validated->collective) ||
-      validated->collective != "ALL_REDUCE" || group_domain == nullptr ||
+      !SupportedCollective(validated->collective) || group_domain == nullptr ||
       !StringMember(*spec, "dtype", &validated->dtype) ||
       validated->dtype != "BF16" ||
       !StringMember(*spec, "reduction", &validated->reduction) ||
-      validated->reduction != "SUM" ||
+      validated->reduction != ExpectedReduction(validated->collective) ||
+      (validated->collective != "ALL_REDUCE" &&
+       (!StringMember(*spec, "payloadSemantics", &payload_semantics) ||
+        payload_semantics !=
+            ExpectedPayloadSemantics(validated->collective))) ||
+      (validated->collective == "ALL_TO_ALL_V" &&
+       (!StringMember(*spec, "routingDigest", &validated->routing_digest) ||
+        !IsSha256Identifier(validated->routing_digest))) ||
       !StringMember(*spec, "timingScope", &timing_scope) ||
       timing_scope != "DEVICE_ONLY" ||
       !FirstArrayPositiveInt(*group_domain, "rankCounts", &rank_count) ||
@@ -1187,26 +1503,42 @@ bool ValidateHcclCostModel(
           validated->config.maximum_message_bytes ||
       !StringMember(*message_domain, "unit", &message_unit) ||
       message_unit != "B" || fit == nullptr ||
-      !StringMember(*fit, "family", &family) || family != "ALPHA_BETA" ||
+      !StringMember(*fit, "family", &family) ||
       !StringMember(*fit, "interpolation", &interpolation) ||
-      interpolation != "NONE" || startup == nullptr ||
-      !PositiveUint64Member(
-          *startup, "value", &validated->config.startup_ns) ||
-      !StringMember(*startup, "unit", &startup_unit) ||
-      startup_unit != "ns" || bandwidth == nullptr ||
-      !NumberMember(
-          *bandwidth, "value", &validated->config.bandwidth_Bps) ||
-      validated->config.bandwidth_Bps <= 0.0 ||
-      !StringMember(*bandwidth, "unit", &bandwidth_unit) ||
-      bandwidth_unit != "B/s" || input_sample == nullptr ||
+      !((family == "ALPHA_BETA" && interpolation == "NONE" &&
+         startup != nullptr &&
+         PositiveUint64Member(
+             *startup, "value", &validated->config.startup_ns) &&
+         StringMember(*startup, "unit", &startup_unit) &&
+         startup_unit == "ns" && bandwidth != nullptr &&
+         NumberMember(
+             *bandwidth, "value", &validated->config.bandwidth_Bps) &&
+         validated->config.bandwidth_Bps > 0.0 &&
+         StringMember(*bandwidth, "unit", &bandwidth_unit) &&
+         bandwidth_unit == "B/s") ||
+        (family == "PIECEWISE_ALPHA_BETA" &&
+         interpolation == "SEGMENT_LOCAL" &&
+         ParsePiecewiseSegments(
+             *fit,
+             validated->config.minimum_message_bytes,
+             validated->config.maximum_message_bytes,
+             &validated->config.segments)) ||
+        (family == "LEGACY_BUSBW_ADAPTER" &&
+         interpolation == "NONE" && startup != nullptr &&
+         PositiveUint64Member(
+             *startup, "value", &validated->config.startup_ns) &&
+         StringMember(*startup, "unit", &startup_unit) &&
+         startup_unit == "ns" &&
+         validated->config.bandwidth_Bps > 0.0)) ||
+      input_sample == nullptr ||
       input_samples == nullptr ||
       input_samples->type != JsonValue::Type::Array ||
-      input_samples->array.size() != 1U ||
+      input_samples->array.empty() ||
       !StringMember(
           *input_sample, "id", &validated->input_sample_id) ||
       validated->input_sample_id.empty() || traffic == nullptr ||
       !StringMember(*traffic, "algorithm", &traffic_algorithm) ||
-      traffic_algorithm != "RING" ||
+      traffic_algorithm != ExpectedTrafficAlgorithm(validated->collective) ||
       !StringMember(*traffic, "semantics", &traffic_semantics) ||
       traffic_semantics != "ALGORITHM_TOTAL_GROUP_BYTES" ||
       !StringMember(*spec, "evidenceClass", &validated->evidence_level) ||
@@ -1222,24 +1554,41 @@ bool ValidateHcclCostModel(
         contract,
         "HCCL_COST_MODEL_SCHEMA_INVALID",
         "The HCCL DerivedCostModel or its domain is invalid.",
-        "Provide a non-extrapolating AllReduce model matching the Profile.");
+        "Provide a non-extrapolating collective model matching the Profile.");
     return false;
   }
 
-  const double llround_upper_exclusive = std::ldexp(
-      1.0, std::numeric_limits<long long>::digits);
-  const double maximum_duration_ns =
-      static_cast<double>(validated->config.startup_ns) +
-      static_cast<double>(validated->config.maximum_message_bytes) *
-          1000000000.0 / validated->config.bandwidth_Bps;
-  if (!std::isfinite(maximum_duration_ns) ||
-      maximum_duration_ns >= llround_upper_exclusive) {
-    Reject(
-        contract,
-        "HCCL_COST_MODEL_NUMERIC_OVERFLOW",
-        "The HCCL model duration exceeds the supported rounding range.",
-        "Use finite model parameters whose duration is below 2^63 ns.");
-    return false;
+  if (validated->config.segments.empty()) {
+    const double llround_upper_exclusive = std::ldexp(
+        1.0, std::numeric_limits<long long>::digits);
+    const double maximum_duration_ns =
+        static_cast<double>(validated->config.startup_ns) +
+        static_cast<double>(validated->config.maximum_message_bytes) *
+            1000000000.0 / validated->config.bandwidth_Bps;
+    if (!std::isfinite(maximum_duration_ns) ||
+        maximum_duration_ns >= llround_upper_exclusive) {
+      Reject(
+          contract,
+          "HCCL_COST_MODEL_NUMERIC_OVERFLOW",
+          "The HCCL model duration exceeds the supported rounding range.",
+          "Use finite model parameters whose duration is below 2^63 ns.");
+      return false;
+    }
+  }
+
+  for (const JsonValue& sample : input_samples->array) {
+    std::string sample_id;
+    if (sample.type != JsonValue::Type::Object ||
+        !StringMember(sample, "id", &sample_id) || sample_id.empty()) {
+      Reject(
+          contract,
+          "HCCL_COST_MODEL_SCHEMA_INVALID",
+          "Every inputSamples entry must identify one RawObservation.",
+          "Provide immutable RawObservation id/path/SHA-256 references.");
+      return false;
+    }
+    validated->raw_references.push_back(sample);
+    validated->input_sample_ids.push_back(sample_id);
   }
 
   if (group_type == "TP") {
@@ -1258,7 +1607,21 @@ bool ValidateHcclCostModel(
         "Use TP, DP, EP, or DP_EP.");
     return false;
   }
-  validated->config.collective = AstraSim::CostedCollective::AllReduce;
+  if (validated->collective == "ALL_REDUCE") {
+    validated->config.collective = AstraSim::CostedCollective::AllReduce;
+  } else if (validated->collective == "ALL_GATHER") {
+    validated->config.collective = AstraSim::CostedCollective::AllGather;
+  } else if (validated->collective == "REDUCE_SCATTER") {
+    validated->config.collective = AstraSim::CostedCollective::ReduceScatter;
+  } else if (validated->collective == "ALL_TO_ALL") {
+    validated->config.collective = AstraSim::CostedCollective::AllToAll;
+  } else {
+    validated->config.collective = AstraSim::CostedCollective::AllToAllV;
+    validated->config.routing_digest = validated->routing_digest;
+  }
+  validated->config.payload_semantics =
+      ExpectedPayloadSemantics(validated->collective);
+  validated->config.traffic_algorithm = traffic_algorithm;
   validated->config.rank_count = rank_count;
   validated->config.topology_domain = profile.topology_domain;
   validated->config.topology_digest = profile.topology_digest;
@@ -1301,6 +1664,10 @@ bool ValidateRawObservation(
       spec == nullptr ? nullptr : Member(*spec, "correctness");
   const JsonValue* eligibility =
       spec == nullptr ? nullptr : Member(*spec, "eligibility");
+  const JsonValue* algorithm =
+      spec == nullptr ? nullptr : Member(*spec, "algorithm");
+  const JsonValue* statistics =
+      spec == nullptr ? nullptr : Member(*spec, "statistics");
 
   std::string profile_ref;
   std::string raw_id;
@@ -1316,11 +1683,37 @@ bool ValidateRawObservation(
   std::string dtype;
   std::string reduction;
   std::string correctness_status;
+  std::string raw_routing_digest;
+  std::string algorithm_name;
+  std::string algorithm_version;
+  std::string timing_statistic;
   int rank_count = 0;
+  int sample_count = 0;
   uint64_t message_bytes = 0;
   uint64_t time_ns = 0;
   double normalized_bandwidth_Bps = 0.0;
   bool eligible_for_fit = false;
+  bool warmup_excluded = false;
+  const bool payload_value_valid = bytes_per_rank != nullptr &&
+      (model.collective == "ALL_TO_ALL_V"
+           ? (PositiveUint64Member(
+                  *bytes_per_rank, "maximumValue", &message_bytes) &&
+              payload != nullptr &&
+              StringMember(*payload, "routingDigest", &raw_routing_digest) &&
+              raw_routing_digest == model.routing_digest)
+           : PositiveUint64Member(
+                 *bytes_per_rank, "uniformValue", &message_bytes));
+  const bool has_canonical_metadata = model.collective == "ALL_REDUCE" ||
+      (algorithm != nullptr &&
+       StringMember(*algorithm, "name", &algorithm_name) &&
+       algorithm_name == model.config.traffic_algorithm &&
+       StringMember(*algorithm, "version", &algorithm_version) &&
+       !algorithm_version.empty() && statistics != nullptr &&
+       StringMember(*statistics, "timingStatistic", &timing_statistic) &&
+       timing_statistic == "ARITHMETIC_MEAN" &&
+       PositiveIntMember(*statistics, "sampleCount", &sample_count) &&
+       BooleanMember(*statistics, "warmupExcluded", &warmup_excluded) &&
+       warmup_excluded);
   if (!StringMember(raw, "apiVersion", &api_version) ||
       api_version != "simai.ascend.observation/v1alpha1" ||
       !StringMember(raw, "kind", &kind) || kind != "HcclRawSample" ||
@@ -1343,9 +1736,10 @@ bool ValidateRawObservation(
       !StringMember(*group, "topologyDigest", &topology_digest) ||
       topology_digest != profile.topology_digest || bytes_per_rank == nullptr ||
       !StringMember(*bytes_per_rank, "semantics", &byte_semantics) ||
-      byte_semantics != "API_INPUT_BYTES" ||
-      !PositiveUint64Member(
-          *bytes_per_rank, "uniformValue", &message_bytes) ||
+      (model.collective == "ALL_REDUCE"
+           ? byte_semantics != "API_INPUT_BYTES"
+           : byte_semantics != model.config.payload_semantics) ||
+      !payload_value_valid ||
       message_bytes < model.config.minimum_message_bytes ||
       message_bytes > model.config.maximum_message_bytes ||
       !StringMember(*bytes_per_rank, "unit", &byte_unit) || byte_unit != "B" ||
@@ -1369,20 +1763,43 @@ bool ValidateRawObservation(
       !StringMember(*correctness, "status", &correctness_status) ||
       correctness_status != "PASS" || eligibility == nullptr ||
       !BooleanMember(*eligibility, "fit", &eligible_for_fit) ||
-      !eligible_for_fit || !UnitsAreCanonical(raw) ||
+      !eligible_for_fit || !has_canonical_metadata || !UnitsAreCanonical(raw) ||
       ContainsString(raw, "MEASURED")) {
     Reject(
         contract,
         "RAW_OBSERVATION_SCHEMA_INVALID",
         "The immutable HCCL RawObservation is invalid or out of domain.",
-        "Use a canonical-unit AllReduce observation matching Profile and model.");
+        "Use a canonical-unit HCCL observation matching Profile and model.");
     return false;
   }
 
+  uint64_t startup_ns = model.config.startup_ns;
+  double bandwidth_Bps = model.config.bandwidth_Bps;
+  if (!model.config.segments.empty()) {
+    bool matched_segment = false;
+    for (const HcclCostSegment& segment : model.config.segments) {
+      const bool below_upper = segment.maximum_inclusive
+          ? message_bytes <= segment.maximum_message_bytes
+          : message_bytes < segment.maximum_message_bytes;
+      if (message_bytes >= segment.minimum_message_bytes && below_upper) {
+        startup_ns = segment.startup_ns;
+        bandwidth_Bps = segment.bandwidth_Bps;
+        matched_segment = true;
+        break;
+      }
+    }
+    if (!matched_segment) {
+      Reject(
+          contract,
+          "RAW_OBSERVATION_MODEL_INCONSISTENT",
+          "The RawObservation is not covered by a model segment.",
+          "Cover every referenced observation with exactly one segment.");
+      return false;
+    }
+  }
   const double predicted_ns =
-      static_cast<double>(model.config.startup_ns) +
-      static_cast<double>(message_bytes) * 1000000000.0 /
-          model.config.bandwidth_Bps;
+      static_cast<double>(startup_ns) +
+      static_cast<double>(message_bytes) * 1000000000.0 / bandwidth_Bps;
   const uint64_t rounded_prediction_ns =
       static_cast<uint64_t>(std::llround(predicted_ns));
   const uint64_t timing_residual_ns = time_ns > rounded_prediction_ns
@@ -1402,6 +1819,131 @@ bool ValidateRawObservation(
         "RAW_OBSERVATION_MODEL_INCONSISTENT",
         "The RawObservation timing or normalized bandwidth is inconsistent.",
         "Keep timing within 1 ns and bandwidth within 10 ppm of bytes/time.");
+    return false;
+  }
+  return true;
+}
+
+struct ValidatedRouting {
+  uint64_t total_network_bytes = 0;
+  uint64_t maximum_send_bytes = 0;
+  uint64_t maximum_receive_bytes = 0;
+  std::string evidence_level;
+  std::string field_readiness;
+};
+
+bool NonnegativeJsonInteger(const JsonValue& value, uint64_t* parsed) {
+  const double maximum_exact_json_integer = 9007199254740991.0;
+  if (value.type != JsonValue::Type::Number || value.number < 0.0 ||
+      value.number > maximum_exact_json_integer ||
+      std::floor(value.number) != value.number) {
+    return false;
+  }
+  *parsed = static_cast<uint64_t>(value.number);
+  return true;
+}
+
+bool ValidateA2AVRouting(
+    const JsonValue& routing,
+    const std::string& profile_digest,
+    const ValidatedAscendProfile& profile,
+    const ValidatedHcclCostModel& model,
+    AnalyticalRunContract* contract,
+    ValidatedRouting* validated) {
+  std::string api_version;
+  std::string kind;
+  std::string schema_semver;
+  std::string routing_profile_digest;
+  std::string topology_digest;
+  std::string count_semantics;
+  std::string unit;
+  int rank_count = 0;
+  const JsonValue* metadata = Member(routing, "metadata");
+  const JsonValue* spec = Member(routing, "spec");
+  const JsonValue* counts = spec == nullptr ? nullptr : Member(*spec, "sendCounts");
+  const JsonValue* evidence =
+      spec == nullptr ? nullptr : FirstArrayObject(*spec, "evidence");
+  if (!StringMember(routing, "apiVersion", &api_version) ||
+      api_version != "simai.ascend.routing/v1alpha1" ||
+      !StringMember(routing, "kind", &kind) ||
+      kind != "HcclAllToAllVRouting" ||
+      !StringMember(routing, "schemaSemver", &schema_semver) ||
+      schema_semver != "0.1.0" || metadata == nullptr || spec == nullptr ||
+      !StringMember(*spec, "profileDigest", &routing_profile_digest) ||
+      routing_profile_digest != profile_digest ||
+      !StringMember(*spec, "topologyDigest", &topology_digest) ||
+      topology_digest != profile.topology_digest ||
+      !PositiveIntMember(*spec, "rankCount", &rank_count) ||
+      rank_count != model.config.rank_count ||
+      !StringMember(*spec, "countSemantics", &count_semantics) ||
+      count_semantics != "HCCL_SEND_COUNTS_BYTES" ||
+      !StringMember(*spec, "unit", &unit) || unit != "B" ||
+      counts == nullptr || counts->type != JsonValue::Type::Array ||
+      counts->array.size() != static_cast<size_t>(rank_count) ||
+      evidence == nullptr ||
+      !StringMember(*evidence, "class", &validated->evidence_level) ||
+      validated->evidence_level != "USER_INPUT" ||
+      !StringMember(
+          *evidence, "readiness", &validated->field_readiness) ||
+      validated->field_readiness != "FIELD_UNVERIFIED" ||
+      !EvidenceRecordIsComplete(*evidence) || !UnitsAreCanonical(routing) ||
+      ContainsString(routing, "MEASURED")) {
+    Reject(
+        contract,
+        "HCCL_ROUTING_SCHEMA_INVALID",
+        "The HCCL AllToAllV routing counts are invalid.",
+        "Provide a canonical immutable rank-by-rank send-count matrix.");
+    return false;
+  }
+
+  std::vector<uint64_t> receives(static_cast<size_t>(rank_count), 0U);
+  for (int source = 0; source < rank_count; ++source) {
+    const JsonValue& row = counts->array[static_cast<size_t>(source)];
+    if (row.type != JsonValue::Type::Array ||
+        row.array.size() != static_cast<size_t>(rank_count)) {
+      Reject(
+          contract,
+          "HCCL_ROUTING_SCHEMA_INVALID",
+          "The HCCL AllToAllV routing matrix shape is invalid.",
+          "Provide exactly rankCount rows and columns.");
+      return false;
+    }
+    uint64_t send_total = 0U;
+    for (int destination = 0; destination < rank_count; ++destination) {
+      uint64_t bytes = 0U;
+      if (!NonnegativeJsonInteger(
+              row.array[static_cast<size_t>(destination)], &bytes) ||
+          (source == destination && bytes != 0U) ||
+          send_total > std::numeric_limits<uint64_t>::max() - bytes ||
+          receives[static_cast<size_t>(destination)] >
+              std::numeric_limits<uint64_t>::max() - bytes ||
+          validated->total_network_bytes >
+              std::numeric_limits<uint64_t>::max() - bytes) {
+        Reject(
+            contract,
+            "HCCL_ROUTING_SCHEMA_INVALID",
+            "The HCCL AllToAllV routing counts are invalid or overflow.",
+            "Use finite nonnegative byte counts and zero self traffic.");
+        return false;
+      }
+      send_total += bytes;
+      receives[static_cast<size_t>(destination)] += bytes;
+      validated->total_network_bytes += bytes;
+    }
+    validated->maximum_send_bytes =
+        std::max(validated->maximum_send_bytes, send_total);
+  }
+  for (const uint64_t receive_total : receives) {
+    validated->maximum_receive_bytes =
+        std::max(validated->maximum_receive_bytes, receive_total);
+  }
+  if (validated->maximum_send_bytes != model.config.minimum_message_bytes ||
+      model.config.minimum_message_bytes != model.config.maximum_message_bytes) {
+    Reject(
+        contract,
+        "HCCL_ROUTING_MODEL_DOMAIN_MISMATCH",
+        "The routing payload is outside the exact AllToAllV model domain.",
+        "Match the model message point to the maximum per-rank send bytes.");
     return false;
   }
   return true;
@@ -1430,12 +1972,14 @@ bool LoadAscendResources(
     return false;
   }
   contract->device_profile_sha256 = profile_artifact.sha256;
+  contract->topology_required = true;
 
   ValidatedAscendProfile profile;
   if (!ValidateAscendProfile(
           profile_artifact.document, contract, &profile)) {
     return false;
   }
+  contract->topology_readiness = "READY";
 
   const JsonValue* model_reference = Member(root, "collective_cost_model");
   if (model_reference == nullptr) {
@@ -1476,6 +2020,66 @@ bool LoadAscendResources(
     return false;
   }
 
+  if (model.collective == "ALL_TO_ALL_V") {
+    contract->routing_required = true;
+    const JsonValue* routing_reference = Member(root, "routing");
+    if (routing_reference == nullptr) {
+      RejectUnsupported(
+          contract,
+          "HCCL_ROUTING_REQUIRED",
+          "AllToAllV Analytical requires immutable routing counts.",
+          "Provide routing.path and its SHA-256 digest.");
+      return false;
+    }
+    const ArtifactLoadPolicy routing_policy = {
+        "HCCL_ROUTING_REFERENCE_INVALID",
+        "The HCCL routing reference is invalid.",
+        "Provide routing.path and its SHA-256 digest.",
+        "HCCL_ROUTING_NOT_FOUND",
+        "The HCCL routing artifact could not be read.",
+        "Provide a readable public routing artifact.",
+        "HCCL_ROUTING_DIGEST_MISMATCH",
+        "The HCCL routing artifact does not match its declared digest.",
+        "Use the intended immutable routing artifact.",
+        "HCCL_ROUTING_INVALID_JSON",
+        "The HCCL routing artifact is not valid JSON.",
+        "Correct the routing JSON and retry."};
+    LoadedArtifact routing_artifact;
+    if (!LoadArtifact(
+            *routing_reference,
+            routing_policy,
+            contract,
+            &routing_artifact)) {
+      return false;
+    }
+    contract->routing_sha256 = routing_artifact.sha256;
+    if (routing_artifact.sha256 != model.routing_digest) {
+      Reject(
+          contract,
+          "HCCL_ROUTING_MODEL_DIGEST_MISMATCH",
+          "The DerivedCostModel references a different routing artifact.",
+          "Bind the model and Run Manifest to the same routing digest.");
+      return false;
+    }
+    ValidatedRouting routing;
+    if (!ValidateA2AVRouting(
+            routing_artifact.document,
+            profile_artifact.sha256,
+            profile,
+            model,
+            contract,
+            &routing)) {
+      return false;
+    }
+    model.config.routing_digest = routing_artifact.sha256;
+    model.config.routing_total_traffic_bytes =
+        routing.total_network_bytes;
+    model.config.routing_max_receive_bytes =
+        routing.maximum_receive_bytes;
+    contract->routing_evidence_level = routing.evidence_level;
+    contract->routing_field_readiness = routing.field_readiness;
+  }
+
   const ArtifactLoadPolicy raw_policy = {
       "RAW_OBSERVATION_REFERENCE_INVALID",
       "The DerivedCostModel RawObservation reference is invalid.",
@@ -1489,22 +2093,33 @@ bool LoadAscendResources(
       "RAW_OBSERVATION_INVALID_JSON",
       "The RawObservation is not valid JSON.",
       "Correct the RawObservation JSON and derive a new model."};
-  LoadedArtifact raw_artifact;
-  if (!LoadArtifact(
-          model.raw_reference, raw_policy, contract, &raw_artifact)) {
-    return false;
-  }
-  contract->raw_observation_sha256 = raw_artifact.sha256;
-
   ValidatedRawObservation raw;
-  if (!ValidateRawObservation(
-          raw_artifact.document,
-          profile_artifact.sha256,
-          profile,
-          model,
-          contract,
-          &raw)) {
-    return false;
+  for (size_t index = 0; index < model.raw_references.size(); ++index) {
+    LoadedArtifact raw_artifact;
+    if (!LoadArtifact(
+            model.raw_references[index],
+            raw_policy,
+            contract,
+            &raw_artifact)) {
+      return false;
+    }
+    if (index == 0U) {
+      contract->raw_observation_sha256 = raw_artifact.sha256;
+    }
+    model.input_sample_id = model.input_sample_ids[index];
+    ValidatedRawObservation current_raw;
+    if (!ValidateRawObservation(
+            raw_artifact.document,
+            profile_artifact.sha256,
+            profile,
+            model,
+            contract,
+            &current_raw)) {
+      return false;
+    }
+    if (index == 0U) {
+      raw = current_raw;
+    }
   }
 
   contract->hccl_cost_model = model.config;
@@ -1876,10 +2491,17 @@ bool WriteAnalyticalResultManifest(
          << "    \"device_profile_sha256\": "
          << Quote(contract.device_profile_sha256) << ",\n"
          << "    \"cost_model\": " << Quote(cost_model_identity) << ",\n"
+         << "    \"cost_model_adapter\": "
+         << Quote(contract.ascend_profiled
+                      ? contract.hccl_cost_model.source_adapter
+                      : "NOT_APPLICABLE")
+         << ",\n"
          << "    \"cost_model_sha256\": "
          << Quote(contract.cost_model_sha256) << ",\n"
          << "    \"raw_observation_sha256\": "
-         << Quote(contract.raw_observation_sha256) << "\n"
+         << Quote(contract.raw_observation_sha256) << ",\n"
+         << "    \"routing_sha256\": "
+         << Quote(contract.routing_sha256) << "\n"
          << "  },\n"
          << "  \"evidence\": {\n"
          << "    \"workload\": {\"level\": "
@@ -1899,6 +2521,11 @@ bool WriteAnalyticalResultManifest(
          << ", \"digest\": " << Quote(contract.raw_observation_sha256)
          << ", \"readiness\": "
          << Quote(contract.raw_observation_field_readiness) << "},\n"
+         << "    \"routing\": {\"level\": "
+         << Quote(contract.routing_evidence_level)
+         << ", \"digest\": " << Quote(contract.routing_sha256)
+         << ", \"readiness\": "
+         << Quote(contract.routing_field_readiness) << "},\n"
          << "    \"cost_model\": {\"level\": "
          << Quote(contract.cost_model_evidence_level)
          << ", \"digest\": " << Quote(contract.cost_model_sha256)
@@ -1921,6 +2548,17 @@ bool WriteAnalyticalResultManifest(
                                                                : (contract.device_profile_present
                                                                       ? "BLOCKED"
                                                                       : "UNKNOWN"))
+         << ",\n"
+         << "    \"topology\": "
+         << Quote(contract.topology_required ? contract.topology_readiness
+                                             : "NOT_REQUIRED")
+         << ",\n"
+         << "    \"routing\": "
+         << Quote(contract.routing_required
+                      ? (contract.routing_sha256 == "UNKNOWN"
+                             ? "UNKNOWN"
+                             : (valid ? "READY" : "BLOCKED"))
+                      : "NOT_REQUIRED")
          << ",\n"
          << "    \"hbm\": \"UNKNOWN\",\n"
          << "    \"traffic\": "
@@ -1953,6 +2591,18 @@ bool WriteAnalyticalResultManifest(
            << Quote(AstraSim::CostedGroupTypeName(cost_summary.group_type))
            << ", \"topology_domain\": "
            << Quote(cost_summary.topology_domain) << "},\n";
+  } else {
+    output << "\"UNKNOWN\",\n";
+  }
+  output << "    \"collective_payload\": ";
+  if (valid && contract.ascend_profiled) {
+    output << "{\"semantics\": " << Quote(cost_summary.payload_semantics)
+           << ", \"input_B_per_rank\": "
+           << cost_summary.input_bytes_per_rank
+           << ", \"output_B_per_rank\": "
+           << cost_summary.output_bytes_per_rank
+           << ", \"routing_sha256\": "
+           << Quote(cost_summary.routing_digest) << "},\n";
   } else {
     output << "\"UNKNOWN\",\n";
   }
