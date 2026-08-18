@@ -182,7 +182,7 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]);
 bool WriteAnalyticalResultManifest(
     const AnalyticalRunContract& contract,
     bool execution_succeeded,
-    const AstraSim::CollectiveCostModel* cost_model = nullptr);
+    const HcclCostModel* cost_model = nullptr);
 
 }  // namespace SimAIContract
 

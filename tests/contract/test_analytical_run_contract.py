@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 
 
@@ -1274,11 +1275,24 @@ class AnalyticalRunContractTest(unittest.TestCase):
         routing_rank_override=None,
         routing_total_bytes=None,
         routing_via_stdin=False,
+        projected_routing=None,
+        mutate_projected=None,
+        projected_content_override=None,
+        projected_padding_bytes=0,
+        projected_via_stdin=False,
+        projected_digest_override=None,
+        rank_count=4,
+        timeout=30,
     ):
         """Build immutable synthetic artifacts, then observe the real process."""
-        profile_path = FIXTURES / "minimal_ascend_profile.json"
+        profile = json.loads((FIXTURES / "minimal_ascend_profile.json").read_text())
+        profile["metadata"]["id"] = f"synthetic-a2-r{rank_count}-analytical"
+        profile["spec"]["identity"]["physicalChipCount"]["value"] = rank_count
+        profile["spec"]["identity"]["managementDeviceCount"]["value"] = rank_count
+        profile["spec"]["topology"]["levels"][0]["rankCount"] = rank_count
+        profile_content = json.dumps(profile, indent=2) + "\n"
         profile_digest = "sha256:" + hashlib.sha256(
-            profile_path.read_bytes()
+            profile_content.encode()
         ).hexdigest()
         duration_ns = round(20000 + message_bytes / 25000000000 * 1000000000)
         raw = {
@@ -1287,11 +1301,11 @@ class AnalyticalRunContractTest(unittest.TestCase):
             "schemaSemver": "0.1.0",
             "metadata": {"id": f"synthetic-{collective.lower()}-point"},
             "spec": {
-                "profileRef": "synthetic-a2-four-rank-host",
+                "profileRef": profile["metadata"]["id"],
                 "profileDigest": profile_digest,
                 "collective": collective,
                 "group": {
-                    "rankCount": 4,
+                    "rankCount": rank_count,
                     "scope": "HOST",
                     "groupType": "TP",
                     "topologyDigest": "sha256:" + "1" * 64,
@@ -1347,6 +1361,29 @@ class AnalyticalRunContractTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:
             run_directory = self.prepare_run_directory(temp_dir)
+            profile_path = run_directory / "profile.json"
+            profile_path.write_text(profile_content)
+            projected_reference = None
+            projected_content = None
+            if projected_routing is not None:
+                projected_routing = copy.deepcopy(projected_routing)
+                if mutate_projected is not None:
+                    mutate_projected(projected_routing)
+                if projected_padding_bytes:
+                    projected_routing["padding"] = "x" * projected_padding_bytes
+                projected_path = run_directory / "projected-routing.json"
+                projected_content = (
+                    projected_content_override
+                    if projected_content_override is not None
+                    else json.dumps(projected_routing, indent=2) + "\n"
+                )
+                if not projected_via_stdin:
+                    projected_path.write_text(projected_content)
+                projected_reference = {
+                    "path": "/dev/stdin" if projected_via_stdin else str(projected_path),
+                    "sha256": projected_digest_override
+                    or "sha256:" + hashlib.sha256(projected_content.encode()).hexdigest(),
+                }
             routing_reference = None
             if routing_matrix is not None:
                 routing = {
@@ -1428,7 +1465,7 @@ class AnalyticalRunContractTest(unittest.TestCase):
                     "timingScope": "DEVICE_ONLY",
                     "payloadSemantics": payload_semantics,
                     "groupDomain": {
-                        "rankCounts": [4],
+                        "rankCounts": [rank_count],
                         "groupTypes": ["TP"],
                         "scopes": ["HOST"],
                         "topologyDigests": ["sha256:" + "1" * 64],
@@ -1475,8 +1512,8 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 for index in range(layer_count)
             )
             workload_path.write_text(
-                "HYBRID_TRANSFORMER model_parallel_NPU_group: 4 ep: 1 pp: 1 "
-                "vpp: 1 ga: 1 all_gpus: 4 checkpoints: 0 "
+                f"HYBRID_TRANSFORMER model_parallel_NPU_group: {rank_count} ep: 1 pp: 1 "
+                f"vpp: 1 ga: 1 all_gpus: {rank_count} checkpoints: 0 "
                 "checkpoint_initiates: 0 pp_comm 0\n"
                 f"{layer_count}\n"
                 f"{layer_lines}"
@@ -1503,9 +1540,15 @@ class AnalyticalRunContractTest(unittest.TestCase):
             }
             if routing_reference is not None and include_routing:
                 manifest["routing"] = routing_reference
+            if projected_reference is not None:
+                manifest["projected_a2a"] = {
+                    "schema_version": "simai.projected-a2a.request/v1alpha1",
+                    "routing": projected_reference,
+                }
             manifest_path = run_directory / "run.json"
             manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
             result_path = run_directory / "result.json"
+            started = time.monotonic()
             completed = subprocess.run(
                 [
                     str(self.binary),
@@ -1519,11 +1562,31 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 input=routing_content if routing_via_stdin else None,
-                timeout=30,
+                timeout=timeout,
                 check=False,
             )
+            completed.wall_seconds = time.monotonic() - started
+            completed.result_bytes = result_path.stat().st_size
             result = json.loads(result_path.read_text())
         return completed, result
+
+    @staticmethod
+    def projected_routing(policy, *, rank_count=4, domains=None):
+        document = json.loads(
+            (FIXTURES / "projected_a2a_uniform_r4_d2.json").read_text()
+        )
+        if domains is None:
+            domains = [
+                {"id": "domain-0", "firstRank": 0, "rankCount": 2},
+                {"id": "domain-1", "firstRank": 2, "rankCount": 2},
+            ]
+        document["metadata"]["id"] = (
+            f"synthetic-projected-a2a-r{rank_count}-d{len(domains)}"
+        )
+        document["spec"]["rankCount"] = rank_count
+        document["spec"]["domains"] = domains
+        document["spec"]["policy"] = policy
+        return document
 
     def run_segmented_allgather_contract(
         self, runtime_message_bytes, *, mutate_model=None
@@ -3213,6 +3276,354 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 "output_B_per_rank": 1048576,
                 "routing_sha256": "NOT_REQUIRED",
             },
+        )
+
+    def test_projected_uniform_alltoall_matches_enumerated_ground_truth(self):
+        routing = self.projected_routing(
+            {"kind": "UNIFORM", "messageBytesPerRank": 400}
+        )
+        completed, result = self.run_generated_hccl_contract(
+            collective="ALL_TO_ALL",
+            workload_token="ALLTOALL",
+            payload_semantics="HCCL_ALLTOALL_TOTAL_SEND_BYTES",
+            reduction="NONE",
+            traffic_algorithm="UNIFORM_DIRECT_EXCHANGE",
+            message_bytes=400,
+            projected_routing=routing,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(result["status"], "VALID")
+        projected = result["results"]["projected_a2a_traffic"]
+        self.assertEqual(projected["schema_version"], "simai.projected-a2a/v1alpha1")
+        self.assertEqual(
+            projected["capability"],
+            {
+                "backend": "ANALYTICAL",
+                "endpoint_flows_materialized": False,
+                "simulation_flow_support": "NOT_PROVIDED",
+            },
+        )
+        self.assertEqual(projected["readiness"], "READY")
+        self.assertEqual(projected["unit"], "B")
+        self.assertEqual(projected["global_bytes"], 1200)
+        self.assertEqual(
+            projected["per_rank"],
+            [
+                {"rank": 0, "domain": "domain-0", "send_B": 300, "receive_B": 300},
+                {"rank": 1, "domain": "domain-0", "send_B": 300, "receive_B": 300},
+                {"rank": 2, "domain": "domain-1", "send_B": 300, "receive_B": 300},
+                {"rank": 3, "domain": "domain-1", "send_B": 300, "receive_B": 300},
+            ],
+        )
+        self.assertEqual(
+            projected["per_domain"],
+            [
+                {"domain": "domain-0", "send_B": 600, "receive_B": 600},
+                {"domain": "domain-1", "send_B": 600, "receive_B": 600},
+            ],
+        )
+        self.assertEqual(
+            projected["domain_matrix_B"], [[200, 400], [400, 200]]
+        )
+        self.assertEqual(
+            projected["resource_loads"],
+            [
+                {"id": "intra-domain-fabric", "scope": "INTRA_DOMAIN", "offered_load_B": 400},
+                {"id": "inter-domain-fabric", "scope": "INTER_DOMAIN", "offered_load_B": 800},
+            ],
+        )
+        self.assertEqual(
+            projected["conservation"],
+            {
+                "global_equals_rank_send": True,
+                "global_equals_rank_receive": True,
+                "global_equals_domain_matrix": True,
+                "global_equals_resource_loads": True,
+                "domain_rows_equal_send": True,
+                "domain_columns_equal_receive": True,
+                "status": "PASS",
+            },
+        )
+        self.assertEqual(
+            projected["resident_state"],
+            {
+                "rank_summaries": 4,
+                "domain_matrix_cells": 4,
+                "resource_summaries": 2,
+                "resident_dense_routing_cells": 0,
+                "resident_endpoint_flows": 0,
+                "resident_state_units": 10,
+                "complexity": "O(P + D^2 + R)",
+            },
+        )
+        self.assertRegex(projected["provenance"]["routing_sha256"], SHA256_ID)
+        self.assertEqual(projected["provenance"]["policy"], "UNIFORM")
+        self.assertEqual(
+            projected["input_cost"]["artifact_bytes_read"],
+            len((json.dumps(routing, indent=2) + "\n").encode()),
+        )
+        self.assertEqual(projected["input_cost"]["routing_records_read"], 0)
+        self.assertGreaterEqual(projected["input_cost"]["parse_projection_time_ns"], 0)
+        self.assertEqual(
+            projected["determinism"],
+            {
+                "ordering": "RANK_ASCENDING_DOMAIN_DECLARATION_RESOURCE_DECLARATION",
+                "semantic_inputs": "CONTENT_ADDRESSED",
+                "observed_timing_fields_excluded_from_semantic_identity": True,
+            },
+        )
+        self.assertEqual(result["readiness"]["projected_a2a"], "READY")
+        self.assertEqual(result["evidence"]["projected_a2a"]["level"], "USER_INPUT")
+        self.assertEqual(
+            result["evidence"]["projected_a2a"]["readiness"],
+            "FIELD_UNVERIFIED",
+        )
+
+    def test_projected_locality_dense_a2av_matches_enumerated_ground_truth(self):
+        counts = [
+            [0, 80, 10, 10],
+            [70, 0, 20, 10],
+            [10, 10, 0, 80],
+            [20, 10, 70, 0],
+        ]
+        routing = self.projected_routing(
+            {"kind": "DENSE_COUNTS", "scenario": "LOCALITY", "sendCounts": counts}
+        )
+        completed, result = self.run_generated_hccl_contract(
+            collective="ALL_TO_ALL_V",
+            workload_token="ALLTOALLV",
+            payload_semantics="HCCL_ALLTOALLV_COUNTS_MATRIX",
+            reduction="NONE",
+            traffic_algorithm="VARIABLE_DIRECT_EXCHANGE",
+            message_bytes=100,
+            routing_matrix=counts,
+            projected_routing=routing,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        projected = result["results"]["projected_a2a_traffic"]
+        self.assertEqual(projected["global_bytes"], 400)
+        self.assertEqual(
+            [(rank["send_B"], rank["receive_B"]) for rank in projected["per_rank"]],
+            [(100, 100), (100, 100), (100, 100), (100, 100)],
+        )
+        self.assertEqual(projected["domain_matrix_B"], [[150, 50], [50, 150]])
+        self.assertEqual(
+            [resource["offered_load_B"] for resource in projected["resource_loads"]],
+            [300, 100],
+        )
+        self.assertEqual(projected["conservation"]["status"], "PASS")
+        self.assertEqual(
+            projected["input_cost"]["artifact_format"], "IMMUTABLE_DENSE_JSON"
+        )
+        self.assertEqual(projected["input_cost"]["routing_records_read"], 16)
+        self.assertEqual(projected["provenance"]["scenario"], "LOCALITY")
+        self.assertEqual(projected["resident_state"]["resident_dense_routing_cells"], 16)
+        self.assertEqual(
+            projected["resident_state"]["complexity"], "O(P^2 + D^2 + R)"
+        )
+
+    def test_projected_hotspot_dense_a2av_matches_enumerated_ground_truth(self):
+        counts = [
+            [0, 70, 20, 10],
+            [0, 0, 90, 10],
+            [0, 80, 0, 20],
+            [0, 70, 30, 0],
+        ]
+        routing = self.projected_routing(
+            {"kind": "DENSE_COUNTS", "scenario": "HOTSPOT", "sendCounts": counts}
+        )
+        completed, result = self.run_generated_hccl_contract(
+            collective="ALL_TO_ALL_V",
+            workload_token="ALLTOALLV",
+            payload_semantics="HCCL_ALLTOALLV_COUNTS_MATRIX",
+            reduction="NONE",
+            traffic_algorithm="VARIABLE_DIRECT_EXCHANGE",
+            message_bytes=100,
+            routing_matrix=counts,
+            projected_routing=routing,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        projected = result["results"]["projected_a2a_traffic"]
+        self.assertEqual(projected["global_bytes"], 400)
+        self.assertEqual(
+            [rank["send_B"] for rank in projected["per_rank"]], [100, 100, 100, 100]
+        )
+        self.assertEqual(
+            [rank["receive_B"] for rank in projected["per_rank"]], [0, 220, 140, 40]
+        )
+        self.assertEqual(projected["domain_matrix_B"], [[70, 130], [150, 50]])
+        self.assertEqual(
+            [(domain["send_B"], domain["receive_B"]) for domain in projected["per_domain"]],
+            [(200, 220), (200, 180)],
+        )
+        self.assertEqual(
+            [resource["offered_load_B"] for resource in projected["resource_loads"]],
+            [120, 280],
+        )
+        self.assertEqual(
+            projected["imbalance"],
+            {
+                "hottest_receive_rank": 1,
+                "maximum_rank_receive_B": 220,
+                "mean_rank_receive_B": 100,
+                "maximum_to_mean_receive_ratio": 2.2,
+            },
+        )
+        self.assertEqual(projected["conservation"]["status"], "PASS")
+
+    def test_projected_uniform_100000_rank_real_process_has_bounded_state(self):
+        rank_count = 100_000
+        domains = [
+            {"id": f"domain-{index:03d}", "firstRank": index * 1000, "rankCount": 1000}
+            for index in range(100)
+        ]
+        routing = self.projected_routing(
+            {"kind": "UNIFORM", "messageBytesPerRank": rank_count},
+            rank_count=rank_count,
+            domains=domains,
+        )
+        completed, result = self.run_generated_hccl_contract(
+            collective="ALL_TO_ALL",
+            workload_token="ALLTOALL",
+            payload_semantics="HCCL_ALLTOALL_TOTAL_SEND_BYTES",
+            reduction="NONE",
+            traffic_algorithm="UNIFORM_DIRECT_EXCHANGE",
+            message_bytes=rank_count,
+            projected_routing=routing,
+            rank_count=rank_count,
+            timeout=60,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr[-2000:])
+        self.assertLess(completed.wall_seconds, 60)
+        self.assertLess(completed.result_bytes, 32 * 1024 * 1024)
+        projected = result["results"]["projected_a2a_traffic"]
+        self.assertEqual(projected["global_bytes"], 9_999_900_000)
+        self.assertEqual(len(projected["per_rank"]), rank_count)
+        self.assertEqual(projected["per_rank"][0]["send_B"], 99_999)
+        self.assertEqual(projected["per_rank"][-1]["receive_B"], 99_999)
+        self.assertEqual(len(projected["domain_matrix_B"]), 100)
+        self.assertEqual(projected["domain_matrix_B"][0][0], 999_000)
+        self.assertEqual(projected["domain_matrix_B"][0][1], 1_000_000)
+        self.assertEqual(
+            [resource["offered_load_B"] for resource in projected["resource_loads"]],
+            [99_900_000, 9_900_000_000],
+        )
+        self.assertEqual(
+            projected["resident_state"],
+            {
+                "rank_summaries": 100_000,
+                "domain_matrix_cells": 10_000,
+                "resource_summaries": 2,
+                "resident_dense_routing_cells": 0,
+                "resident_endpoint_flows": 0,
+                "resident_state_units": 110_002,
+                "complexity": "O(P + D^2 + R)",
+            },
+        )
+        self.assertEqual(
+            projected["uniform_closed_form"],
+            {
+                "directed_pairs_represented": 9_999_900_000,
+                "directed_pairs_materialized": 0,
+            },
+        )
+        self.assertEqual(projected["input_cost"]["routing_records_read"], 0)
+        self.assertEqual(projected["conservation"]["status"], "PASS")
+
+    def test_projected_a2a_artifacts_fail_closed_at_public_process_boundary(self):
+        uniform = self.projected_routing(
+            {"kind": "UNIFORM", "messageBytesPerRank": 400}
+        )
+        cases = [
+            (
+                "non-regular",
+                {"projected_routing": uniform, "projected_via_stdin": True},
+                "PROJECTED_A2A_ROUTING_NOT_REGULAR",
+            ),
+            (
+                "digest-mismatch",
+                {"projected_routing": uniform, "projected_digest_override": "sha256:" + "0" * 64},
+                "PROJECTED_A2A_ROUTING_DIGEST_MISMATCH",
+            ),
+            (
+                "malformed",
+                {"projected_routing": uniform, "projected_content_override": "{"},
+                "PROJECTED_A2A_ROUTING_INVALID_JSON",
+            ),
+            (
+                "over-limit",
+                {"projected_routing": uniform, "projected_padding_bytes": 8 * 1024 * 1024},
+                "PROJECTED_A2A_ROUTING_ARTIFACT_TOO_LARGE",
+            ),
+            (
+                "unknown-key",
+                {
+                    "projected_routing": uniform,
+                    "mutate_projected": lambda document: document["spec"].update({"flows": []}),
+                },
+                "PROJECTED_A2A_ROUTING_SCHEMA_INVALID",
+            ),
+            (
+                "membership-gap",
+                {
+                    "projected_routing": uniform,
+                    "mutate_projected": lambda document: document["spec"]["domains"][0].update({"firstRank": 1}),
+                },
+                "PROJECTED_A2A_MEMBERSHIP_INVALID",
+            ),
+            (
+                "evidence-unresolved",
+                {
+                    "projected_routing": uniform,
+                    "mutate_projected": lambda document: document["spec"].update({"evidenceRef": "missing"}),
+                },
+                "PROJECTED_A2A_EVIDENCE_INVALID",
+            ),
+        ]
+        for name, kwargs, expected_code in cases:
+            with self.subTest(name=name):
+                completed, result = self.run_generated_hccl_contract(
+                    collective="ALL_TO_ALL",
+                    workload_token="ALLTOALL",
+                    payload_semantics="HCCL_ALLTOALL_TOTAL_SEND_BYTES",
+                    reduction="NONE",
+                    traffic_algorithm="UNIFORM_DIRECT_EXCHANGE",
+                    message_bytes=400,
+                    **kwargs,
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(result["status"], "INVALID_INPUT")
+                self.assertEqual(result["reject_code"], expected_code)
+                self.assertEqual(result["results"]["projected_a2a_traffic"], "UNKNOWN")
+
+        counts = [
+            [0, 80, 10, 10],
+            [70, 0, 20, 10],
+            [10, 10, 0, 80],
+            [20, 10, 70, 0],
+        ]
+        divergent = copy.deepcopy(counts)
+        divergent[0][1], divergent[0][2] = divergent[0][2], divergent[0][1]
+        completed, result = self.run_generated_hccl_contract(
+            collective="ALL_TO_ALL_V",
+            workload_token="ALLTOALLV",
+            payload_semantics="HCCL_ALLTOALLV_COUNTS_MATRIX",
+            reduction="NONE",
+            traffic_algorithm="VARIABLE_DIRECT_EXCHANGE",
+            message_bytes=100,
+            routing_matrix=counts,
+            projected_routing=self.projected_routing(
+                {"kind": "DENSE_COUNTS", "scenario": "ARBITRARY", "sendCounts": divergent}
+            ),
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(
+            result["reject_code"], "PROJECTED_A2A_DENSE_BINDING_MISMATCH"
         )
 
     def test_alltoallv_uses_routing_counts_for_payload_and_traffic(self):

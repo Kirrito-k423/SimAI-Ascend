@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "astra-sim/system/CollectiveCostModel.hh"
+#include "ProjectedA2ATraffic.h"
 
 namespace SimAIContract {
 
@@ -40,8 +41,10 @@ struct HcclCostModelConfig {
   std::string routing_digest = "NOT_REQUIRED";
   uint64_t routing_total_traffic_bytes = 0;
   uint64_t routing_max_receive_bytes = 0;
+  std::vector<uint64_t> routing_send_counts;
   std::string topology_domain;
   std::string topology_digest;
+  ProjectedA2AConfig projected_a2a;
 };
 
 class HcclCostModel : public AstraSim::CollectiveCostModel {
@@ -51,12 +54,14 @@ class HcclCostModel : public AstraSim::CollectiveCostModel {
   AstraSim::CollectiveCostEstimate Estimate(
       const AstraSim::CollectiveCostRequest& request) override;
   AstraSim::CollectiveCostSummary Summary() const override;
+  const ProjectedA2ASummary& ProjectedSummary() const;
 
  private:
   AstraSim::CollectiveCostEstimate Unsupported(const std::string& reason);
 
   HcclCostModelConfig config_;
   AstraSim::CollectiveCostSummary summary_;
+  ProjectedA2ASummary projected_summary_;
 };
 
 }  // namespace SimAIContract

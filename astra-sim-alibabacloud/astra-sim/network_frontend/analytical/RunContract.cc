@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <cstdint>
@@ -23,6 +24,7 @@
 #include <string>
 #include <vector>
 
+#include <sys/stat.h>
 #include <unistd.h>
 
 #if defined(__APPLE__)
@@ -41,6 +43,9 @@ const size_t kMaximumTargetModelArtifactBytes = 256U * 1024U;
 const size_t kMaximumTargetStepArtifactBytes = 64U * 1024U;
 const size_t kMaximumTargetRoutingArtifactBytes = 64U * 1024U;
 const size_t kMaximumTargetMemoryArtifactBytes = 128U * 1024U;
+const size_t kMaximumProjectedRoutingArtifactBytes = 8U * 1024U * 1024U;
+const int kMaximumProjectedDenseRanks = 256;
+const size_t kMaximumProjectedDomains = 1024U;
 
 uint32_t RotateRight(uint32_t value, uint32_t count) {
   return (value >> count) | (value << (32U - count));
@@ -1204,6 +1209,7 @@ struct ArtifactLoadPolicy {
 struct LoadedArtifact {
   JsonValue document;
   std::string sha256;
+  size_t bytes_read = 0U;
 };
 
 bool LoadArtifact(
@@ -1247,6 +1253,7 @@ bool LoadArtifact(
     return false;
   }
   artifact->sha256 = "sha256:" + Sha256Hex(content);
+  artifact->bytes_read = content.size();
   if (artifact->sha256 != declared_digest) {
     Reject(
         contract,
@@ -4985,6 +4992,7 @@ struct ValidatedRouting {
   uint64_t total_network_bytes = 0;
   uint64_t maximum_send_bytes = 0;
   uint64_t maximum_receive_bytes = 0;
+  std::vector<uint64_t> send_counts;
   std::string evidence_level;
   std::string field_readiness;
 };
@@ -5126,6 +5134,7 @@ bool ValidateA2AVRouting(
       send_total += bytes;
       receives[static_cast<size_t>(destination)] += bytes;
       validated->total_network_bytes += bytes;
+      validated->send_counts.push_back(bytes);
     }
     validated->maximum_send_bytes =
         std::max(validated->maximum_send_bytes, send_total);
@@ -5277,6 +5286,7 @@ bool LoadAscendResources(
         routing.total_network_bytes;
     model.config.routing_max_receive_bytes =
         routing.maximum_receive_bytes;
+    model.config.routing_send_counts = routing.send_counts;
     contract->routing_evidence_level = routing.evidence_level;
     contract->routing_field_readiness = routing.field_readiness;
   }
@@ -5347,6 +5357,309 @@ bool LoadAscendResources(
   contract->ascend_profiled = true;
   return true;
 }
+
+bool LoadProjectedA2A(
+    const JsonValue& root,
+    AnalyticalRunContract* contract) {
+  const JsonValue* envelope = Member(root, "projected_a2a");
+  if (envelope == nullptr) {
+    contract->hccl_cost_model.routing_send_counts.clear();
+    return true;
+  }
+  std::string schema_version;
+  const JsonValue* routing_reference = Member(*envelope, "routing");
+  if (!ObjectHasExactKeys(*envelope, {"schema_version", "routing"}) ||
+      !StringMember(*envelope, "schema_version", &schema_version) ||
+      schema_version != "simai.projected-a2a.request/v1alpha1" ||
+      routing_reference == nullptr) {
+    Reject(
+        contract,
+        "PROJECTED_A2A_ENVELOPE_INVALID",
+        "The Projected A2A request envelope is invalid.",
+        "Use the exact simai.projected-a2a.request/v1alpha1 envelope.");
+    return false;
+  }
+  std::string routing_path;
+  std::string declared_digest;
+  struct stat routing_stat;
+  if (!ParseArtifactReference(
+          *routing_reference, &routing_path, &declared_digest) ||
+      stat(routing_path.c_str(), &routing_stat) != 0 ||
+      !S_ISREG(routing_stat.st_mode)) {
+    Reject(
+        contract,
+        "PROJECTED_A2A_ROUTING_NOT_REGULAR",
+        "Projected A2A routing must be an immutable regular artifact.",
+        "Provide a regular content-addressed file, not stdin, a FIFO, or a device.");
+    return false;
+  }
+  const std::chrono::steady_clock::time_point parse_started =
+      std::chrono::steady_clock::now();
+  const ArtifactLoadPolicy routing_policy = {
+      "PROJECTED_A2A_ROUTING_REFERENCE_INVALID",
+      "The Projected A2A routing reference is invalid.",
+      "Provide routing.path and sha256:<64 lowercase hex digits>.",
+      "PROJECTED_A2A_ROUTING_NOT_FOUND",
+      "The Projected A2A routing artifact could not be read.",
+      "Provide a readable immutable regular file.",
+      "PROJECTED_A2A_ROUTING_DIGEST_MISMATCH",
+      "The Projected A2A routing artifact does not match its digest.",
+      "Use the intended immutable artifact and digest.",
+      "PROJECTED_A2A_ROUTING_INVALID_JSON",
+      "The Projected A2A routing artifact is not valid JSON.",
+      "Correct the routing JSON and retry."};
+  LoadedArtifact artifact;
+  if (!LoadArtifact(
+          *routing_reference,
+          routing_policy,
+          contract,
+          &artifact,
+          kMaximumProjectedRoutingArtifactBytes,
+          "PROJECTED_A2A_ROUTING_ARTIFACT_TOO_LARGE",
+          "The Projected A2A routing artifact exceeds 8 MiB.",
+          "Use a bounded artifact no larger than 8 MiB.")) {
+    return false;
+  }
+
+  const JsonValue& routing = artifact.document;
+  const JsonValue* metadata = Member(routing, "metadata");
+  const JsonValue* spec = Member(routing, "spec");
+  const JsonValue* domains = spec == nullptr ? nullptr : Member(*spec, "domains");
+  const JsonValue* policy = spec == nullptr ? nullptr : Member(*spec, "policy");
+  const JsonValue* resources = spec == nullptr ? nullptr : Member(*spec, "resources");
+  const JsonValue* evidence = spec == nullptr ? nullptr : Member(*spec, "evidence");
+  std::string api_version;
+  std::string kind;
+  std::string semver;
+  std::string artifact_id;
+  std::string unit;
+  std::string evidence_ref;
+  int rank_count = 0;
+  if (!ObjectHasExactKeys(
+          routing, {"apiVersion", "kind", "schemaSemver", "metadata", "spec"}) ||
+      !StringMember(routing, "apiVersion", &api_version) ||
+      api_version != "simai.ascend.projected-a2a.routing/v1alpha1" ||
+      !StringMember(routing, "kind", &kind) ||
+      kind != "ProjectedA2ARouting" ||
+      !StringMember(routing, "schemaSemver", &semver) || semver != "1.0.0" ||
+      metadata == nullptr || !ObjectHasExactKeys(*metadata, {"id"}) ||
+      !StringMember(*metadata, "id", &artifact_id) ||
+      !IsSafeRunId(artifact_id) || spec == nullptr ||
+      !ObjectHasExactKeys(
+          *spec,
+          {"rankCount", "domains", "policy", "resources", "unit",
+           "evidenceRef", "evidence"}) ||
+      !ExactPositiveIntMember(*spec, "rankCount", &rank_count) ||
+      rank_count != contract->hccl_cost_model.rank_count ||
+      !StringMember(*spec, "unit", &unit) || unit != "B" ||
+      !StringMember(*spec, "evidenceRef", &evidence_ref) ||
+      evidence_ref.empty() || domains == nullptr ||
+      domains->type != JsonValue::Type::Array || domains->array.empty() ||
+      domains->array.size() > kMaximumProjectedDomains || policy == nullptr ||
+      resources == nullptr || resources->type != JsonValue::Type::Array ||
+      resources->array.size() != 2U || evidence == nullptr ||
+      evidence->type != JsonValue::Type::Array || evidence->array.size() != 1U) {
+    Reject(
+        contract,
+        "PROJECTED_A2A_ROUTING_SCHEMA_INVALID",
+        "The Projected A2A routing schema or runtime identity is invalid.",
+        "Use the exact v1alpha1 schema and match the HCCL model rank count.");
+    return false;
+  }
+
+  ProjectedA2AConfig parsed;
+  parsed.present = true;
+  parsed.rank_count = rank_count;
+  parsed.artifact_id = artifact_id;
+  parsed.artifact_sha256 = artifact.sha256;
+  parsed.artifact_bytes_read = artifact.bytes_read;
+  int next_rank = 0;
+  std::set<std::string> domain_ids;
+  for (const JsonValue& domain : domains->array) {
+    ProjectedA2ADomain parsed_domain;
+    uint64_t first_rank = 0U;
+    if (!ObjectHasExactKeys(domain, {"id", "firstRank", "rankCount"}) ||
+        !StringMember(domain, "id", &parsed_domain.id) ||
+        !IsSafeRunId(parsed_domain.id) ||
+        !ExactNonNegativeUint64Member(domain, "firstRank", &first_rank) ||
+        first_rank != static_cast<uint64_t>(next_rank) ||
+        !ExactPositiveIntMember(domain, "rankCount", &parsed_domain.rank_count) ||
+        domain_ids.count(parsed_domain.id) != 0U ||
+        parsed_domain.rank_count > rank_count - next_rank) {
+      Reject(
+          contract,
+          "PROJECTED_A2A_MEMBERSHIP_INVALID",
+          "Rank-to-domain membership is incomplete, overlapping, or invalid.",
+          "Use sorted contiguous domain ranges covering every rank exactly once.");
+      return false;
+    }
+    parsed_domain.first_rank = next_rank;
+    next_rank += parsed_domain.rank_count;
+    domain_ids.insert(parsed_domain.id);
+    parsed.domains.push_back(parsed_domain);
+  }
+  if (next_rank != rank_count) {
+    Reject(
+        contract,
+        "PROJECTED_A2A_MEMBERSHIP_INVALID",
+        "Rank-to-domain membership does not cover the HCCL group.",
+        "Cover ranks [0, rankCount) exactly once.");
+    return false;
+  }
+
+  std::set<std::string> resource_ids;
+  std::set<std::string> resource_scopes;
+  for (const JsonValue& resource : resources->array) {
+    ProjectedA2AResource parsed_resource;
+    if (!ObjectHasExactKeys(resource, {"id", "scope"}) ||
+        !StringMember(resource, "id", &parsed_resource.id) ||
+        !IsSafeRunId(parsed_resource.id) ||
+        !StringMember(resource, "scope", &parsed_resource.scope) ||
+        (parsed_resource.scope != "INTRA_DOMAIN" &&
+         parsed_resource.scope != "INTER_DOMAIN") ||
+        resource_ids.count(parsed_resource.id) != 0U ||
+        resource_scopes.count(parsed_resource.scope) != 0U) {
+      Reject(
+          contract,
+          "PROJECTED_A2A_RESOURCE_SCHEMA_INVALID",
+          "Projected resource identities or scopes are invalid.",
+          "Provide one unique INTRA_DOMAIN and one INTER_DOMAIN resource.");
+      return false;
+    }
+    resource_ids.insert(parsed_resource.id);
+    resource_scopes.insert(parsed_resource.scope);
+    parsed.resources.push_back(parsed_resource);
+  }
+
+  std::string policy_kind;
+  if (!StringMember(*policy, "kind", &policy_kind)) {
+    Reject(
+        contract,
+        "PROJECTED_A2A_POLICY_INVALID",
+        "The Projected A2A routing policy is invalid.",
+        "Use UNIFORM or DENSE_COUNTS.");
+    return false;
+  }
+  if (policy_kind == "UNIFORM") {
+    if (!ObjectHasExactKeys(*policy, {"kind", "messageBytesPerRank"}) ||
+        !ExactPositiveUint64Member(
+            *policy, "messageBytesPerRank", &parsed.message_bytes_per_rank) ||
+        parsed.message_bytes_per_rank !=
+            contract->hccl_cost_model.minimum_message_bytes ||
+        parsed.message_bytes_per_rank !=
+            contract->hccl_cost_model.maximum_message_bytes ||
+        contract->hccl_cost_model.collective !=
+            AstraSim::CostedCollective::AllToAll ||
+        parsed.message_bytes_per_rank % static_cast<uint64_t>(rank_count) != 0U) {
+      Reject(
+          contract,
+          "PROJECTED_A2A_UNIFORM_POLICY_INVALID",
+          "The uniform policy does not match the exact AllToAll model domain.",
+          "Use a divisible per-rank message matching the AllToAll model point.");
+      return false;
+    }
+    parsed.policy = ProjectedA2APolicy::Uniform;
+    parsed.scenario = "UNIFORM";
+  } else if (policy_kind == "DENSE_COUNTS") {
+    const JsonValue* counts = Member(*policy, "sendCounts");
+    if (!ObjectHasExactKeys(*policy, {"kind", "scenario", "sendCounts"}) ||
+        !StringMember(*policy, "scenario", &parsed.scenario) ||
+        (parsed.scenario != "LOCALITY" && parsed.scenario != "HOTSPOT" &&
+         parsed.scenario != "ARBITRARY") ||
+        contract->hccl_cost_model.collective !=
+            AstraSim::CostedCollective::AllToAllV ||
+        rank_count > kMaximumProjectedDenseRanks || counts == nullptr ||
+        counts->type != JsonValue::Type::Array ||
+        counts->array.size() != static_cast<size_t>(rank_count)) {
+      Reject(
+          contract,
+          "PROJECTED_A2A_DENSE_POLICY_INVALID",
+          "The dense routing policy is invalid or exceeds its bounded domain.",
+          "Use a square nonnegative matrix of at most 256 ranks.");
+      return false;
+    }
+    parsed.policy = ProjectedA2APolicy::DenseCounts;
+    for (int source = 0; source < rank_count; ++source) {
+      const JsonValue& row = counts->array[static_cast<size_t>(source)];
+      if (row.type != JsonValue::Type::Array ||
+          row.array.size() != static_cast<size_t>(rank_count)) {
+        Reject(
+            contract,
+            "PROJECTED_A2A_DENSE_POLICY_INVALID",
+            "The dense routing matrix shape is invalid.",
+            "Use exactly rankCount rows and columns.");
+        return false;
+      }
+      for (int destination = 0; destination < rank_count; ++destination) {
+        uint64_t bytes = 0U;
+        if (!ExactUnsignedDecimal(
+                row.array[static_cast<size_t>(destination)],
+                std::numeric_limits<uint64_t>::max(),
+                true,
+                &bytes) ||
+            (source == destination && bytes != 0U)) {
+          Reject(
+              contract,
+              "PROJECTED_A2A_DENSE_COUNT_INVALID",
+              "A dense routing count is invalid or contains self traffic.",
+              "Use exact uint64 byte counts and zero diagonal entries.");
+          return false;
+        }
+        parsed.dense_send_counts.push_back(bytes);
+      }
+    }
+    if (parsed.dense_send_counts !=
+        contract->hccl_cost_model.routing_send_counts) {
+      Reject(
+          contract,
+          "PROJECTED_A2A_DENSE_BINDING_MISMATCH",
+          "Projected dense counts differ from the validated HCCL routing artifact.",
+          "Project the exact immutable A2AV counts consumed by the HCCL provider.");
+      return false;
+    }
+    contract->hccl_cost_model.routing_send_counts.clear();
+    contract->hccl_cost_model.routing_send_counts.shrink_to_fit();
+  } else {
+    Reject(
+        contract,
+        "PROJECTED_A2A_POLICY_INVALID",
+        "The Projected A2A routing policy is unsupported.",
+        "Use UNIFORM or DENSE_COUNTS.");
+    return false;
+  }
+
+  std::string evidence_id;
+  std::string evidence_class;
+  std::string readiness;
+  bool hardware_available = false;
+  if (!A2EvidenceRecordIsExact(
+          evidence->array.front(),
+          &evidence_id,
+          &evidence_class,
+          &readiness,
+          &hardware_available) ||
+      evidence_id != evidence_ref ||
+      (readiness == "FIELD_VERIFIED" && !hardware_available)) {
+    Reject(
+        contract,
+        "PROJECTED_A2A_EVIDENCE_INVALID",
+        "Projected routing evidence is unresolved or inconsistent.",
+        "Bind one exact evidenceRef with honest readiness and availability.");
+    return false;
+  }
+  parsed.evidence_level = evidence_class;
+  parsed.field_readiness = readiness;
+  const std::chrono::steady_clock::duration elapsed =
+      std::chrono::steady_clock::now() - parse_started;
+  const std::chrono::nanoseconds parse_ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed);
+  parsed.parse_time_ns = parse_ns.count() < 0
+      ? 0U
+      : static_cast<uint64_t>(parse_ns.count());
+  contract->hccl_cost_model.projected_a2a = parsed;
+  return true;
+}
+
 std::string JsonEscape(const std::string& input) {
   std::ostringstream escaped;
   for (const unsigned char character : input) {
@@ -5386,6 +5699,155 @@ std::string JsonEscape(const std::string& input) {
 
 std::string Quote(const std::string& value) {
   return "\"" + JsonEscape(value) + "\"";
+}
+
+void WriteProjectedA2AResult(
+    std::ostream& output,
+    const AnalyticalRunContract& contract,
+    const ProjectedA2ASummary& summary) {
+  if (!contract.hccl_cost_model.projected_a2a.present ||
+      !summary.consumed_by_analytical || !summary.ready) {
+    output << "\"UNKNOWN\"";
+    return;
+  }
+  const size_t domain_count = summary.per_domain.size();
+  const size_t dense_routing_cells =
+      contract.hccl_cost_model.projected_a2a.dense_send_counts.size();
+  const size_t resident_state_units = summary.per_rank.size() +
+      summary.domain_matrix_bytes.size() + summary.resource_loads.size() +
+      dense_routing_cells;
+  const uint64_t combined_time =
+      summary.parse_time_ns > std::numeric_limits<uint64_t>::max() -
+              summary.projection_time_ns
+      ? std::numeric_limits<uint64_t>::max()
+      : summary.parse_time_ns + summary.projection_time_ns;
+  output
+      << "{\"schema_version\": \"simai.projected-a2a/v1alpha1\", "
+      << "\"capability\": {\"backend\": \"ANALYTICAL\", "
+      << "\"endpoint_flows_materialized\": false, "
+      << "\"simulation_flow_support\": \"NOT_PROVIDED\"}, "
+      << "\"readiness\": \"READY\", \"unit\": \"B\", "
+      << "\"global_bytes\": " << summary.global_bytes << ", "
+      << "\"per_rank\": [";
+  for (size_t index = 0U; index < summary.per_rank.size(); ++index) {
+    if (index != 0U) {
+      output << ", ";
+    }
+    const ProjectedA2ARankSummary& rank = summary.per_rank[index];
+    output << "{\"rank\": " << rank.rank
+           << ", \"domain\": " << Quote(rank.domain)
+           << ", \"send_B\": " << rank.send_bytes
+           << ", \"receive_B\": " << rank.receive_bytes << "}";
+  }
+  output << "], \"per_domain\": [";
+  for (size_t index = 0U; index < summary.per_domain.size(); ++index) {
+    if (index != 0U) {
+      output << ", ";
+    }
+    const ProjectedA2ADomainSummary& domain = summary.per_domain[index];
+    output << "{\"domain\": " << Quote(domain.domain)
+           << ", \"send_B\": " << domain.send_bytes
+           << ", \"receive_B\": " << domain.receive_bytes << "}";
+  }
+  output << "], \"domain_matrix_B\": [";
+  for (size_t source = 0U; source < domain_count; ++source) {
+    if (source != 0U) {
+      output << ", ";
+    }
+    output << "[";
+    for (size_t destination = 0U; destination < domain_count; ++destination) {
+      if (destination != 0U) {
+        output << ", ";
+      }
+      output << summary.domain_matrix_bytes[
+          source * domain_count + destination];
+    }
+    output << "]";
+  }
+  output << "], \"resource_loads\": [";
+  for (size_t index = 0U; index < summary.resource_loads.size(); ++index) {
+    if (index != 0U) {
+      output << ", ";
+    }
+    const ProjectedA2AResourceSummary& resource =
+        summary.resource_loads[index];
+    output << "{\"id\": " << Quote(resource.id)
+           << ", \"scope\": " << Quote(resource.scope)
+           << ", \"offered_load_B\": " << resource.offered_load_bytes
+           << "}";
+  }
+  output
+      << "], \"conservation\": {"
+      << "\"global_equals_rank_send\": "
+      << (summary.global_equals_rank_send ? "true" : "false")
+      << ", \"global_equals_rank_receive\": "
+      << (summary.global_equals_rank_receive ? "true" : "false")
+      << ", \"global_equals_domain_matrix\": "
+      << (summary.global_equals_domain_matrix ? "true" : "false")
+      << ", \"global_equals_resource_loads\": "
+      << (summary.global_equals_resource_loads ? "true" : "false")
+      << ", \"domain_rows_equal_send\": "
+      << (summary.domain_rows_equal_send ? "true" : "false")
+      << ", \"domain_columns_equal_receive\": "
+      << (summary.domain_columns_equal_receive ? "true" : "false")
+      << ", \"status\": \"PASS\"}, "
+      << "\"imbalance\": {\"hottest_receive_rank\": "
+      << summary.hottest_receive_rank
+      << ", \"maximum_rank_receive_B\": "
+      << summary.maximum_rank_receive_bytes
+      << ", \"mean_rank_receive_B\": "
+      << std::setprecision(17) << summary.mean_rank_receive_bytes
+      << ", \"maximum_to_mean_receive_ratio\": "
+      << std::setprecision(17) << summary.maximum_to_mean_receive_ratio
+      << "}, "
+      << "\"resident_state\": {\"rank_summaries\": "
+      << summary.per_rank.size()
+      << ", \"domain_matrix_cells\": "
+      << summary.domain_matrix_bytes.size()
+      << ", \"resource_summaries\": " << summary.resource_loads.size()
+      << ", \"resident_dense_routing_cells\": " << dense_routing_cells
+      << ", \"resident_endpoint_flows\": 0, \"resident_state_units\": "
+      << resident_state_units
+      << ", \"complexity\": "
+      << Quote(dense_routing_cells == 0U
+                   ? "O(P + D^2 + R)"
+                   : "O(P^2 + D^2 + R)")
+      << "}, ";
+  if (summary.policy == "UNIFORM") {
+    output << "\"uniform_closed_form\": {\"directed_pairs_represented\": "
+           << summary.directed_pairs_represented
+           << ", \"directed_pairs_materialized\": "
+           << summary.directed_pairs_materialized << "}, ";
+  } else {
+    output << "\"uniform_closed_form\": \"NOT_APPLICABLE\", ";
+  }
+  output << "\"input_cost\": {\"artifact_bytes_read\": "
+      << summary.artifact_bytes_read
+      << ", \"artifact_format\": "
+      << Quote(summary.policy == "DENSE_COUNTS"
+                   ? "IMMUTABLE_DENSE_JSON"
+                   : "IMMUTABLE_UNIFORM_JSON")
+      << ", \"routing_records_read\": " << summary.routing_records_read
+      << ", \"parse_time_ns\": " << summary.parse_time_ns
+      << ", \"projection_time_ns\": " << summary.projection_time_ns
+      << ", \"parse_projection_time_ns\": " << combined_time << "}, "
+      << "\"determinism\": {"
+      << "\"ordering\": \"RANK_ASCENDING_DOMAIN_DECLARATION_RESOURCE_DECLARATION\", "
+      << "\"semantic_inputs\": \"CONTENT_ADDRESSED\", "
+      << "\"observed_timing_fields_excluded_from_semantic_identity\": true}, "
+      << "\"provenance\": {\"routing_id\": "
+      << Quote(summary.artifact_id)
+      << ", \"routing_sha256\": " << Quote(summary.artifact_sha256)
+      << ", \"policy\": " << Quote(summary.policy)
+      << ", \"scenario\": " << Quote(summary.scenario)
+      << ", \"workload_sha256\": " << Quote(contract.workload_sha256)
+      << ", \"device_profile_sha256\": "
+      << Quote(contract.device_profile_sha256)
+      << ", \"cost_model_sha256\": " << Quote(contract.cost_model_sha256)
+      << ", \"topology_digest\": " << Quote(contract.topology_digest)
+      << ", \"evidence_level\": " << Quote(summary.evidence_level)
+      << ", \"field_readiness\": " << Quote(summary.field_readiness)
+      << "}}";
 }
 
 enum class LegacyWorkloadCollectiveCheck {
@@ -5654,8 +6116,19 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
         "Provide device_profile.path and its SHA-256 digest.");
     return contract;
   }
+  if (device_profile == nullptr && Member(root, "projected_a2a") != nullptr) {
+    RejectUnsupported(
+        &contract,
+        "PROJECTED_A2A_ASCEND_ANALYTICAL_REQUIRED",
+        "Projected A2A is available only through the Ascend Analytical provider.",
+        "Select an Ascend Profile and HCCL cost model.");
+    return contract;
+  }
   if (device_profile != nullptr) {
     if (!LoadAscendResources(root, *device_profile, &contract)) {
+      return contract;
+    }
+    if (!LoadProjectedA2A(root, &contract)) {
       return contract;
     }
     if (contract.a2_ground_truth_ready) {
@@ -5805,7 +6278,7 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
 bool WriteAnalyticalResultManifest(
     const AnalyticalRunContract& contract,
     bool execution_succeeded,
-    const AstraSim::CollectiveCostModel* cost_model) {
+    const HcclCostModel* cost_model) {
   if (contract.result_manifest_path.empty()) {
     return false;
   }
@@ -5819,6 +6292,9 @@ bool WriteAnalyticalResultManifest(
   const AstraSim::CollectiveCostSummary cost_summary =
       cost_model == nullptr ? AstraSim::CollectiveCostSummary()
                             : cost_model->Summary();
+  const ProjectedA2ASummary projected_summary =
+      cost_model == nullptr ? ProjectedA2ASummary()
+                            : cost_model->ProjectedSummary();
   const bool ascend_cost_valid = !contract.ascend_profiled ||
       (cost_summary.has_estimate && !cost_summary.unsupported_request);
   const bool valid =
@@ -5909,6 +6385,9 @@ bool WriteAnalyticalResultManifest(
          << Quote(contract.raw_observation_sha256) << ",\n"
          << "    \"routing_sha256\": "
          << Quote(contract.routing_sha256) << ",\n"
+         << "    \"projected_a2a_routing_sha256\": "
+         << Quote(contract.hccl_cost_model.projected_a2a.artifact_sha256)
+         << ",\n"
          << "    \"target_model_sha256\": "
          << Quote(contract.target_model_sha256) << ",\n"
          << "    \"target_step_sha256\": "
@@ -5973,6 +6452,13 @@ bool WriteAnalyticalResultManifest(
          << Quote(contract.target_memory_event_plan_sha256)
          << ", \"readiness\": "
          << Quote(contract.target_memory_field_readiness) << "},\n"
+         << "    \"projected_a2a\": {\"level\": "
+         << Quote(contract.hccl_cost_model.projected_a2a.evidence_level)
+         << ", \"digest\": "
+         << Quote(contract.hccl_cost_model.projected_a2a.artifact_sha256)
+         << ", \"readiness\": "
+         << Quote(contract.hccl_cost_model.projected_a2a.field_readiness)
+         << "},\n"
          << "    \"a2_ground_truth\": {\"level\": "
          << Quote(contract.a2_ground_truth_evidence_level)
          << ", \"digest\": " << Quote(contract.a2_ground_truth_result_sha256)
@@ -6042,6 +6528,14 @@ bool WriteAnalyticalResultManifest(
          << ",\n"
          << "    \"traffic\": "
          << Quote(valid && contract.ascend_profiled ? "READY" : "UNKNOWN")
+         << ",\n"
+         << "    \"projected_a2a\": "
+         << Quote(contract.hccl_cost_model.projected_a2a.present
+                      ? (valid && projected_summary.ready &&
+                                 projected_summary.consumed_by_analytical
+                             ? "READY"
+                             : "BLOCKED")
+                      : "NOT_REQUIRED")
          << ",\n"
          << "    \"a2_ground_truth\": "
          << Quote(contract.a2_ground_truth_present
@@ -6193,6 +6687,9 @@ bool WriteAnalyticalResultManifest(
   } else {
     output << "\"UNKNOWN\",\n";
   }
+  output << "    \"projected_a2a_traffic\": ";
+  WriteProjectedA2AResult(output, contract, projected_summary);
+  output << ",\n";
   output << "    \"target_workload\": ";
   if (contract.target_model_ready) {
     output << "{\"model\": {\"logical_trainable_parameters\": "

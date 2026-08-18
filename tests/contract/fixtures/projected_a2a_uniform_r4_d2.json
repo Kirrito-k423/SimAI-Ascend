@@ -1,0 +1,59 @@
+{
+  "apiVersion": "simai.ascend.projected-a2a.routing/v1alpha1",
+  "kind": "ProjectedA2ARouting",
+  "schemaSemver": "1.0.0",
+  "metadata": {
+    "id": "synthetic-projected-a2a-r4-d2"
+  },
+  "spec": {
+    "rankCount": 4,
+    "domains": [
+      {
+        "id": "domain-0",
+        "firstRank": 0,
+        "rankCount": 2
+      },
+      {
+        "id": "domain-1",
+        "firstRank": 2,
+        "rankCount": 2
+      }
+    ],
+    "policy": {
+      "kind": "UNIFORM",
+      "messageBytesPerRank": 400
+    },
+    "resources": [
+      {
+        "id": "intra-domain-fabric",
+        "scope": "INTRA_DOMAIN"
+      },
+      {
+        "id": "inter-domain-fabric",
+        "scope": "INTER_DOMAIN"
+      }
+    ],
+    "unit": "B",
+    "evidenceRef": "routing-input",
+    "evidence": [
+      {
+        "id": "routing-input",
+        "class": "USER_INPUT",
+        "readiness": "FIELD_UNVERIFIED",
+        "source": {
+          "uri": "fixture://issue-20/projected-a2a",
+          "ref": "enumerated-ground-truth-v1"
+        },
+        "method": {
+          "name": "independent-enumeration",
+          "version": "1"
+        },
+        "asOf": "2026-08-18T00:00:00+08:00",
+        "conditions": {
+          "hardwareAvailable": false
+        },
+        "sanitization": "synthetic-no-host-data"
+      }
+    ]
+  }
+}

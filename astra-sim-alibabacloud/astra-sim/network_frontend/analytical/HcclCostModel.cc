@@ -119,13 +119,27 @@ AstraSim::CollectiveCostEstimate HcclCostModel::Estimate(
            std::numeric_limits<uint64_t>::max() / output_multiplier)) {
     return Unsupported("TRAFFIC_RESULT_OUT_OF_RANGE");
   }
+  if (config_.projected_a2a.present &&
+      !ProjectA2ATraffic(
+          config_.projected_a2a,
+          request.rank_count,
+          request.message_bytes_per_rank,
+          variable_counts,
+          &projected_summary_)) {
+    return Unsupported(projected_summary_.failure_reason);
+  }
+  const uint64_t modeled_traffic_bytes = variable_counts
+      ? config_.routing_total_traffic_bytes
+      : request.message_bytes_per_rank * traffic_multiplier;
+  if (config_.projected_a2a.present &&
+      projected_summary_.global_bytes != modeled_traffic_bytes) {
+    return Unsupported("PROJECTED_A2A_COST_TRAFFIC_MISMATCH");
+  }
 
   AstraSim::CollectiveCostEstimate estimate;
   estimate.supported = true;
   estimate.duration_ns = static_cast<uint64_t>(std::llround(duration_ns));
-  estimate.traffic_bytes = variable_counts
-      ? config_.routing_total_traffic_bytes
-      : request.message_bytes_per_rank * traffic_multiplier;
+  estimate.traffic_bytes = modeled_traffic_bytes;
   if (summary_.total_duration_ns >
           std::numeric_limits<uint64_t>::max() - estimate.duration_ns ||
       summary_.total_traffic_bytes >
@@ -152,6 +166,10 @@ AstraSim::CollectiveCostEstimate HcclCostModel::Estimate(
 
 AstraSim::CollectiveCostSummary HcclCostModel::Summary() const {
   return summary_;
+}
+
+const ProjectedA2ASummary& HcclCostModel::ProjectedSummary() const {
+  return projected_summary_;
 }
 
 }  // namespace SimAIContract
