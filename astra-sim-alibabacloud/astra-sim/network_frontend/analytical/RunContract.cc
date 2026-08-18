@@ -2332,6 +2332,8 @@ LegacyWorkloadCollectiveCheck CheckLegacyWorkloadCollectives(
       !std::getline(input, layer_count_line)) {
     return LegacyWorkloadCollectiveCheck::Malformed;
   }
+  const AstraSim::WorkloadLayerRecordFormat record_format =
+      AstraSim::DecodeWorkloadLayerRecordFormat(header);
   std::istringstream count_input(layer_count_line);
   int layer_count = 0;
   std::string count_suffix;
@@ -2342,16 +2344,19 @@ LegacyWorkloadCollectiveCheck CheckLegacyWorkloadCollectives(
 
   bool has_alltoallv = false;
   for (int layer = 0; layer < layer_count; ++layer) {
-    std::array<std::string, 12> fields;
-    for (std::string& field : fields) {
-      if (!(input >> field)) {
-        return LegacyWorkloadCollectiveCheck::Malformed;
-      }
+    AstraSim::DecodedWorkloadLayerRecord record;
+    if (!AstraSim::DecodeWorkloadLayerRecord(
+            input, record_format, &record)) {
+      return LegacyWorkloadCollectiveCheck::Malformed;
     }
-    const std::array<size_t, 3> collective_fields = {{3U, 6U, 9U}};
-    for (const size_t field : collective_fields) {
+    const std::array<std::string, 3> collective_fields = {{
+        record.forward_collective,
+        record.input_gradient_collective,
+        record.weight_gradient_collective,
+    }};
+    for (const std::string& field : collective_fields) {
       const AstraSim::WorkloadAllToAllVToken decoded =
-          AstraSim::DecodeWorkloadAllToAllVToken(fields[field]);
+          AstraSim::DecodeWorkloadAllToAllVToken(field);
       if (decoded == AstraSim::WorkloadAllToAllVToken::InvalidVariant) {
         return LegacyWorkloadCollectiveCheck::InvalidAllToAllVVariant;
       }

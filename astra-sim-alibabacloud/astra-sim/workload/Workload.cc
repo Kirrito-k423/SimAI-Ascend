@@ -1152,6 +1152,8 @@ bool Workload::initialize_workload(std::string name) {
   }
  std::string firstline;
   std::getline(inFile,firstline);
+  const WorkloadLayerRecordFormat layer_record_format =
+      DecodeWorkloadLayerRecordFormat(firstline);
   // std::cout << "First line is : '" << firstline << "'" << std::endl;
   std::istringstream iss(firstline);
   std:string token;
@@ -1280,33 +1282,23 @@ bool Workload::initialize_workload(std::string name) {
   SIZE = lines;
   layers = new Layer*[SIZE];
   for (int i = 0; i < lines; i++) {
-    std::string id;
-    inFile >> id;
-    int depen;
-    inFile >> depen;
-
-    Tick fp_compute_time;
-    inFile >> fp_compute_time;
-    std::string fp_comm_type_s;
-    inFile >> fp_comm_type_s;
-    uint64_t fp_comm_size;
-    inFile >> fp_comm_size;
-
-    Tick ig_compute_time;
-    inFile >> ig_compute_time;
-    std::string ig_comm_type_s;
-    inFile >> ig_comm_type_s;
-    uint64_t ig_comm_size;
-    inFile >> ig_comm_size;
-
-    Tick wg_compute_time;
-    inFile >> wg_compute_time;
-    std::string wg_comm_type_s;
-    inFile >> wg_comm_type_s;
-    uint64_t wg_comm_size;
-    inFile >> wg_comm_size;
-    Tick wg_update_time;
-    inFile >> wg_update_time;
+    DecodedWorkloadLayerRecord record;
+    if (!DecodeWorkloadLayerRecord(inFile, layer_record_format, &record)) {
+      SIZE = i;
+      return false;
+    }
+    const std::string& id = record.id;
+    const int depen = record.dependency;
+    const Tick fp_compute_time = record.forward_compute_time;
+    const std::string& fp_comm_type_s = record.forward_collective;
+    const uint64_t fp_comm_size = record.forward_collective_bytes;
+    const Tick ig_compute_time = record.input_gradient_compute_time;
+    const std::string& ig_comm_type_s = record.input_gradient_collective;
+    const uint64_t ig_comm_size = record.input_gradient_collective_bytes;
+    const Tick wg_compute_time = record.weight_gradient_compute_time;
+    const std::string& wg_comm_type_s = record.weight_gradient_collective;
+    const uint64_t wg_comm_size = record.weight_gradient_collective_bytes;
+    const Tick wg_update_time = record.weight_update_time;
 
     ParallelismPolicy specific_policy = ParallelismPolicy::None;
     std::map<std::string, std::vector<bool>> selected_involved_dimensions;
@@ -1540,10 +1532,9 @@ bool Workload::initialize_workload(std::string name) {
       std::cout << "id: " << id << " , depen: " << depen
                 << " , wg_comp_time: " << wg_compute_time << std::endl;
     }
-    if (parallelismPolicy == ParallelismPolicy::HybridCustomized) {
-      std::string specific_parallelsim;
-      inFile >> specific_parallelsim;
-      specific_policy = decode_parallelsim(specific_parallelsim);
+    if (layer_record_format ==
+        WorkloadLayerRecordFormat::HybridCustomized13) {
+      specific_policy = decode_parallelsim(record.specific_parallelism);
     }
     if ((parallelismPolicy == ParallelismPolicy::DLRM ||
          parallelismPolicy == ParallelismPolicy::DLRMEnhanced) &&

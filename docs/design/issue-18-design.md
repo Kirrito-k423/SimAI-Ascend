@@ -220,7 +220,7 @@ AG/RS/A2A algbw = busbw × P / (P-1)
 
 A2AV 不接受单一 legacy busbw row。Result `provenance.cost_model_adapter=EXPLICIT_LEGACY_BUSBW` 明确记录适配发生；普通模型为 `NONE`。不存在任何按列位置、`GB/s` 文本、相邻消息或默认 rank 的隐式兼容。
 
-legacy GPU workload 同样不允许 AllToAllV 进入 `cal_busbw`。Run Contract 与 `Workload` 共用 typed decoder，只接受通信列中的完整枚举 `ALLTOALLV`、`ALLTOALLV_EP`、`ALLTOALLV_DP_EP`；Run Contract 按每层固定结构只读取 fp/ig/wg 三个通信字段，因此 layer ID 或名称不会误触发。支持的 A2AV token 返回 `UNSUPPORTED/LEGACY_ALLTOALLV_UNSUPPORTED`，未知 `ALLTOALLV*` 变体返回 `INVALID_INPUT/LEGACY_COLLECTIVE_TOKEN_INVALID`，`Workload` 也不会再把未知变体按前缀降级为 A2AV 或 AllToAll。其他 legacy collective 保持 #16 行为。
+legacy GPU workload 同样不允许 AllToAllV 进入 `cal_busbw`。Run Contract 与 `Workload` 共用 typed header/record/collective decoder：普通 header 选择 12 列 layer record，`HYBRID_CUSTOMIZED` 选择带末尾 per-layer parallelism 的 13 列 record；两个消费者都通过同一 decoder 前进到下一层，并只检查解码后的 fp/ig/wg 三个通信字段，因此多层 customized workload 不会错位，layer ID 或名称也不会误触发。通信枚举只接受完整的 `ALLTOALLV`、`ALLTOALLV_EP`、`ALLTOALLV_DP_EP`。支持的 A2AV token 返回 `UNSUPPORTED/LEGACY_ALLTOALLV_UNSUPPORTED`，未知 `ALLTOALLV*` 变体返回 `INVALID_INPUT/LEGACY_COLLECTIVE_TOKEN_INVALID`，`Workload` 也不会再把未知变体按前缀降级为 A2AV 或 AllToAll。其他 legacy collective 保持 #16 行为。
 
 ### 4.6 单请求 Result 闭包
 
@@ -259,7 +259,7 @@ legacy GPU workload 同样不允许 AllToAllV 进入 `cal_busbw`。Run Contract 
 | 3. known point、interval boundary、monotonicity | 4096/65535/65536/1048576 四点测试断言精确 ns，且结果排序不下降；跨段下降 1 ns 的模型稳定拒绝 |
 | 4. legacy busbw 仅显式 adapter | 有效 adapter 断言 provenance 与换算结果；缺 adapter、缺列、`GB/s`、message-domain mismatch 分别断言独立拒绝码和 UNKNOWN |
 | 5. routing/topology/cost 可区分 UNKNOWN/readiness | 三个负例分别断言独立 reject code、`UNKNOWN/READY/NOT_REQUIRED/BLOCKED` 组合和 UNKNOWN 定量结果 |
-| 6. 真实进程与 legacy 回归 | 同一完整 contract suite 包含 #16 legacy GPU/CLI、#17 AR、五类消息矩阵、legacy A2AV typed decode/fail-closed、non-seekable routing 上界和 #18 全部新增行为；最终数量以验证命令输出为准 |
+| 6. 真实进程与 legacy 回归 | 同一完整 contract suite 包含 #16 legacy GPU/CLI、#17 AR、五类消息矩阵、普通与 customized 12/13 列多层 legacy A2AV typed decode/fail-closed、non-seekable routing 上界和 #18 全部新增行为；最终数量以验证命令输出为准 |
 
 独立 message matrix 使用同一固定 Profile/拓扑和确定性 synthetic model，改变 collective 与 message point；所有 Run reference 重新计算 SHA-256。Result 反向核对 operation/payload/timing/traffic/provenance，避免由实现内部状态自证。
 

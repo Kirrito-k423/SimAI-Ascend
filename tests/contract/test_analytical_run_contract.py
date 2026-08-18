@@ -152,20 +152,41 @@ class AnalyticalRunContractTest(unittest.TestCase):
         input_gradient_token="NONE",
         weight_gradient_token="NONE",
     ):
+        return self.run_generated_legacy_records(
+            "HYBRID_TRANSFORMER",
+            [
+                {
+                    "layer_id": layer_id,
+                    "forward": workload_token,
+                    "input_gradient": input_gradient_token,
+                    "weight_gradient": weight_gradient_token,
+                }
+            ],
+        )
+
+    def run_generated_legacy_records(self, header_policy, records):
         manifest = json.loads(
             (FIXTURES / "minimal_legacy_gpu_run.json").read_text()
         )
         with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:
             run_directory = self.prepare_run_directory(temp_dir)
             workload_path = run_directory / "legacy-workload.txt"
+            layer_lines = ""
+            for record in records:
+                layer_lines += (
+                    f"{record['layer_id']}\t-1\t10\t{record['forward']}"
+                    f"\t1048576\t10\t{record['input_gradient']}\t0"
+                    f"\t10\t{record['weight_gradient']}\t0\t10"
+                )
+                if header_policy == "HYBRID_CUSTOMIZED":
+                    layer_lines += "\tDATA"
+                layer_lines += "\n"
             workload_path.write_text(
-                "HYBRID_TRANSFORMER model_parallel_NPU_group: 1 ep: 1 pp: 1 "
+                f"{header_policy} model_parallel_NPU_group: 1 ep: 1 pp: 1 "
                 "vpp: 1 ga: 1 all_gpus: 1 checkpoints: 0 "
                 "checkpoint_initiates: 0 pp_comm 0\n"
-                "1\n"
-                f"{layer_id}\t-1\t10\t{workload_token}\t1048576"
-                f"\t10\t{input_gradient_token}\t0"
-                f"\t10\t{weight_gradient_token}\t0\t10\n"
+                f"{len(records)}\n"
+                f"{layer_lines}"
             )
             manifest["workload"] = {
                 "path": str(workload_path),
@@ -716,6 +737,109 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 )
                 self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
                 self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
+
+    def test_customized_second_layer_alltoallv_is_unsupported(self):
+        for phase in ("forward", "input_gradient", "weight_gradient"):
+            records = [
+                {
+                    "layer_id": "customized_first",
+                    "forward": "NONE",
+                    "input_gradient": "NONE",
+                    "weight_gradient": "NONE",
+                },
+                {
+                    "layer_id": "customized_second",
+                    "forward": "NONE",
+                    "input_gradient": "NONE",
+                    "weight_gradient": "NONE",
+                },
+            ]
+            records[1][phase] = "ALLTOALLV"
+            with self.subTest(phase=phase):
+                completed, result = self.run_generated_legacy_records(
+                    "HYBRID_CUSTOMIZED", records
+                )
+
+                self.assertEqual(completed.returncode, 3)
+                self.assertEqual(result["status"], "UNSUPPORTED")
+                self.assertEqual(
+                    result["reject_code"], "LEGACY_ALLTOALLV_UNSUPPORTED"
+                )
+
+    def test_customized_second_layer_unknown_alltoallv_is_invalid(self):
+        for phase in ("forward", "input_gradient", "weight_gradient"):
+            records = [
+                {
+                    "layer_id": "customized_first",
+                    "forward": "NONE",
+                    "input_gradient": "NONE",
+                    "weight_gradient": "NONE",
+                },
+                {
+                    "layer_id": "customized_second",
+                    "forward": "NONE",
+                    "input_gradient": "NONE",
+                    "weight_gradient": "NONE",
+                },
+            ]
+            records[1][phase] = "ALLTOALLVXYZ"
+            with self.subTest(phase=phase):
+                completed, result = self.run_generated_legacy_records(
+                    "HYBRID_CUSTOMIZED", records
+                )
+
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(result["status"], "INVALID_INPUT")
+                self.assertEqual(
+                    result["reject_code"],
+                    "LEGACY_COLLECTIVE_TOKEN_INVALID",
+                )
+
+    def test_customized_second_layer_identifier_is_not_a_collective(self):
+        completed, result = self.run_generated_legacy_records(
+            "HYBRID_CUSTOMIZED",
+            [
+                {
+                    "layer_id": "customized_first",
+                    "forward": "NONE",
+                    "input_gradient": "NONE",
+                    "weight_gradient": "NONE",
+                },
+                {
+                    "layer_id": "ALLTOALLV_debug",
+                    "forward": "NONE",
+                    "input_gradient": "NONE",
+                    "weight_gradient": "NONE",
+                },
+            ],
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(result["reject_code"], "NONE")
+
+    def test_standard_multi_layer_legacy_workload_remains_valid(self):
+        completed, result = self.run_generated_legacy_records(
+            "HYBRID_TRANSFORMER",
+            [
+                {
+                    "layer_id": "standard_first",
+                    "forward": "NONE",
+                    "input_gradient": "NONE",
+                    "weight_gradient": "NONE",
+                },
+                {
+                    "layer_id": "standard_second",
+                    "forward": "NONE",
+                    "input_gradient": "NONE",
+                    "weight_gradient": "NONE",
+                },
+            ],
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(result["reject_code"], "NONE")
 
     def test_minimal_ascend_allreduce_uses_profiled_hccl_cost(self):
         completed, result, _ = self.run_contract(
