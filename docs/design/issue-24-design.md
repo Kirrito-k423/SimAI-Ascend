@@ -22,6 +22,9 @@ rank-map/group digest、domain matrix、跨域字节、local-expert-hit 与共�
   Result Manifest/退出码；测试不直接调用生产 analyzer。
 - baseline: 写生产代码前，CMake glob/exclude 等价 63-source C++11 全链接 PASS，
   既有真实进程回归 `114/114` PASS。
+- review-fix: 固定原实现 `536853f5b9a2dabe330e3d1df3b6425cce1c9479`，开始于
+  `2026-08-19T01:26:48+0800`；六项 finding 均先用旧 binary 固化真实进程 RED，再做
+  最小 GREEN；结束于 `2026-08-19T02:08:11+0800`，wall-clock `41m23s`。
 - skill: 已完整读取并遵循 `tdd` 和 `code-review`；任务提及的 `implement` skill 不在
   当前可用列表，未伪称使用。
 - 超时 profile: `profile-codex-session` 不可用，使用
@@ -57,13 +60,18 @@ MoE:       N = ETP × EP × EDP × PP
 二者分别校验，不能用 attention DP 代替 MoE EDP。Target Workload 的 routed experts 必须
 精确为 2,048，且每个 EP 必须整除 2,048。regular candidate set 必须精确覆盖
 `[128, 256, 512, 1024, 2048]`。100,000 不是这些 EP 的整倍数，因此 exact/product lane
-只有在 artifact 携一条绑定的 `FIELD_VERIFIED` 目标框架 ragged process-group/shard/
-optimizer capability evidence 时才 READY；缺失时结果为 `UNKNOWN/UNSUPPORTED`。
+只有在 artifact 携一条绑定目标框架 source revision/content digest，并逐项证明 non-uniform
+process group、tensor shard、expert shard、optimizer-state semantics 的
+`SOURCE_CODE_AUDIT/FIELD_VERIFIED` evidence 时才 READY；缺失时结果为
+`UNKNOWN/UNSUPPORTED`。通用 evidence record、`USER_INPUT/LEGACY_ASSUMED`、无关
+source/method 或 `hardwareAvailable=false` 都不能升级 readiness。
 
 每种 placement 用一个无需常驻 rank vector 的确定性双射表示：topology-aware 是 identity
-rank order；flat/random 是由固定 seed 导出的、与 active-rank count 互素的 affine
-permutation。每个 MoE EP group 按 logical contiguous membership 构造，再经过 rank map
-映射到物理 topology domains。每个 group 只生成 domain rank counts，传给 #20
+rank order；flat/random 是版本化 `AFFINE_DOMAIN_MIXING_PRP_V2`，其 normalized
+multiplier 与 active-rank count 互素、拒绝 ±1，并保证足以跨 topology domain 的最小
+stride，Result 同时输出 multiplier/offset。每个 MoE EP group 按
+`ETP×EP×EDP×PP` mixed-radix membership 构造，再经过 rank map 映射到物理 topology
+domains。每个 group 只生成 domain rank counts，传给 #20
 `ProjectA2ATraffic`；输出聚合到 candidate 的 `D×D` matrix。生产代码从不创建 endpoint
 pair/flow，也不保留 `P²` 状态。
 
@@ -91,11 +99,11 @@ flowchart TD
   D --> E{"topology_placement 存在?"}
   E -- "否" --> F["既有路径；Result=NOT_REQUIRED"]
   E -- "是" --> G["regular file + 256 KiB bounded read + SHA-256"]
-  G --> H["exact schema；identity/evidence/resource/grid/policy"]
+  G --> H["exact schema；subject-bound evidence/resource/grid/policy"]
   H --> I{"100k active 且有 FIELD_VERIFIED ragged evidence?"}
   I -- "否" --> X["exit 3；UNKNOWN/UNSUPPORTED"]
   I -- "是或 regular" --> J["生成 deterministic rank-map digest"]
-  J --> K["逐 EP 构造 complete canonical groups"]
+  J --> K["构造 attention/MoE/optimizer mixed-radix groups"]
   K --> L["逐 group 统计 domain counts"]
   L --> M["调用 #20 ProjectA2ATraffic typed seam"]
   M --> N["聚合 D×D matrix / cross / intra / resource loads"]
@@ -114,11 +122,13 @@ Topology analyzer 是同一进程中的 typed traffic-only 分析，不是 write
 
 实现只需要本地 CPU、普通文件、C++11 和现有 Analytical binary。输入 path 在输出中不
 回显；Result 只含 content digest、受控 identity/evidence、整数 traffic 和固定枚举。
-topology artifact 必须通过 `stat(2)` regular-file gate，读取上限为 256 KiB，摘要在 JSON
-解析前验证。不存在网络、NPU、CANN、HCCL 设备 ABI 或远端依赖。
+topology artifact 用一次 `open(O_NOFOLLOW|O_NONBLOCK)` 取得 descriptor，并在同一
+descriptor 上 `fstat` 后做 `max+1` bounded read；不会发生 path `stat` 后重新打开的
+TOCTOU。symlink、FIFO 和设备 fail-closed，读取上限为 256 KiB，摘要在 JSON 解析前验证。
+不存在网络、NPU、CANN、HCCL 设备 ABI 或远端依赖。
 
-设 active ranks 为 `P`、topology domains 为 `D`、候选数为 `C=10`、某 EP 下 groups 为
-`G=ceil(P/EP)`。实现的资源上界是：
+设 active ranks 为 `P`、topology domains 为 `D`、候选数为 `C=10`、某 folded MoE
+grid 的非空 EP slices 为 `G`。实现的资源上界是：
 
 ```text
 输入 artifact                         O(1)，<= 256 KiB
@@ -142,8 +152,9 @@ endpoint flows / dense pair records   0
    8,192-rank domains 完全独立；输出 12 full domains，绝不复用 current-product identity。
 3. exact no evidence：100,000 active 需要 ragged groups；缺目标框架证据返回 exit 3、
    `EXACT_RAGGED_FRAMEWORK_CAPABILITY_REQUIRED` 和 `UNKNOWN/UNSUPPORTED`，不输出默认矩阵。
-4. exact verified：100,000/100,000/0，current topology 为 97 full + 672 active；每个 EP
-   输出其 full groups 和 `[32,160,160,672,1696]` partial group ranks。
+4. exact verified：100,000/100,000/0，current topology 为 97 full + 672 active；默认
+   ETP/PP=1 时每个 EP 输出其 full groups 和 `[32,160,160,672,1696]` partial group
+   ranks，并分别给出 attention/MoE full-grid product 与 remainder。
 5. product capacity：100,000/100,352/352，只允许 current-product topology；同一 active
    placement 与 capacity/spare 身份分开报告。
 6. paired contrasts：每个 EP 输出 flat↔aware delta；每种 placement 输出 EP2048 与
@@ -212,7 +223,8 @@ classDiagram
 
 ### 4.1 Run envelope 和 artifact
 
-Run envelope 只有两个 exact keys：
+Run envelope 以及其中 artifact reference 都是 exact-key 合同；reference 在任何 I/O 前只
+允许 `{path,sha256}`：
 
 ```json
 {
@@ -233,18 +245,22 @@ artifact 使用 `simai.ascend.topology-placement/v1alpha1`，root 固定为
 - `placementPolicies`：精确顺序 `[FLAT_RANDOM, TOPOLOGY_AWARE]` 和 uint64 seed；
 - `traffic`：`HCCL_ALLTOALL_TOTAL_SEND_BYTES`、positive bytes/rank、单位 `B`。
 
-evidence record 复用既有 exact schema，不接受未知 key 或断开的 `evidenceRef`。测试中的
-evidence 使用 `fixture://` synthetic URI，只证明合同路径；它不声称 NPU 实测或公开产品
-性能。topology evidence readiness 与分析 readiness 分开：一个 `FIELD_UNVERIFIED`
-identity 可以用于 traffic sensitivity，但不会被输出成 measured topology performance。
+topology identity 与 ragged framework 使用两个不同的专用 exact schema，不接受未知 key、
+断开的 `evidenceRef` 或通用 evidence 升级。topology claim digest 绑定
+identity/domain/source revision/source digest；ragged claim digest 绑定目标框架、source
+revision/content digest 和四项能力布尔值。两个 schema 都要求唯一 record、允许的
+class/method、`FIELD_VERIFIED` 与 hardware closure。测试中的 `fixture://` record 只是
+synthetic contract fixture，不构成 NPU 实测或公开产品性能主张。
 
 ### 4.2 Rank map 与 communication groups
 
 每个 placement 的 rank-map digest 来自完整 canonical `logical:physical` 序列；Result 不
-驻留该序列，而是输出 algorithm、seed 与 digest。communication group 使用
-`COMPLETE_CANONICAL_FORMULA_V1`：candidate 的完整 attention/MoE factors、active world、
-rank-map digest、target digest 和 logical-contiguous grouping 一起进入 membership digest。
-因此消费者可由 Result factors + 版本化算法重建 memberships 并复算 digest，无需输出
+驻留该序列，而是输出 algorithm、seed、normalized multiplier/offset 与 digest。
+communication groups 使用 `MIXED_RADIX_FORMULA_V1`，固定输出
+`ATTENTION_TP/CP/DP/PP`、`MOE_ETP/EP/EDP/PP`、`OPTIMIZER_DP/EDP` 十个 axis。
+每项都携 membership formula、regular axis size、covered ranks、full-grid product、ragged
+tail 和 digest；candidate 的 factors、active world、rank-map digest、target digest 与公式
+共同进入 digest。因此消费者可由 Result 独立重建 memberships 并复算 digest，无需输出
 100,000 项 rank array 或 endpoint pair list。
 
 ### 4.3 Result Manifest
@@ -269,11 +285,13 @@ rank-map digest、target digest 和 logical-contiguous grouping 一起进入 mem
 调用者先冻结 #19 四资源和 AICB workload，计算 composite digest；然后构造 topology
 artifact，把同一 composite 写入 `targetWorkloadSha256`，对 artifact raw bytes 计算
 SHA-256 并加入 Run Manifest。入口首先按 #19 路径验证工作负载，随后对 topology envelope
-做 exact shape gate，再 `stat`、bounded read 和 digest check。
+做 exact shape gate，再以同一个 fd 完成 `open/fstat/max+1 read` 和 digest check。
 
 schema/evidence 通过后，loader 构造 `TopologyPlacementConfig`。typed analyzer 解析固定
-resource semantics，分别验证 attention denominator 与每个 MoE denominator/EP，推导
-DP/EDP、domain counts 和 ragged tail。每个 placement 先计算一次完整 rank-map digest；
+resource semantics；TP 必须为 power-of-two 且整除 #19 hidden size，ETP 必须为
+power-of-two 且整除 #19 expert intermediate size。regular 对完整 attention/MoE
+denominator 无条件整除；exact/product 的任一 remainder 都需要上述 ragged evidence。
+随后推导 DP/EDP、domain counts 和 ragged tail。每个 placement 先计算一次完整 rank-map digest；
 每个 EP candidate 再按 group 统计 domain counts并调用 #20 projector。projector 的 global/
 matrix/resource conservation 不通过时 analyzer 整体失败。
 
@@ -288,16 +306,20 @@ delta/local-hit；缺任一 candidate 都稳定拒绝。合法 Target Workload �
 | gate | stable result |
 |---|---|
 | exact active 缺 ragged capability evidence | exit 3 / `EXACT_RAGGED_FRAMEWORK_CAPABILITY_REQUIRED` |
+| topology subject/evidence/claim 不闭合 | `TOPOLOGY_IDENTITY_EVIDENCE_INVALID` |
 | topology identity/scope/domain 不闭合 | `TOPOLOGY_IDENTITY_SEMANTICS_INVALID` |
 | architecture identity 用 product-capacity | `PRODUCT_CAPACITY_TOPOLOGY_NOT_APPLICABLE` |
-| attention product 不整除 active world | `ATTENTION_GRID_NOT_DIVISIBLE` |
+| TP 非 power-of-two 或不整除 hidden size | `ATTENTION_TP_SHARD_INVALID` |
+| ETP 非 power-of-two 或不整除 expert width | `MOE_ETP_SHARD_INVALID` |
+| regular attention/MoE 完整 product 不整除 active | `REGULAR_*_GRID_NOT_DIVISIBLE` |
 | EP 不整除 2,048 experts | `EP_NOT_DIVISOR_OF_ROUTED_EXPERTS` |
 | regular EP set 不完整/乱序 | `REGULAR_EP_COVERAGE_INCOMPLETE` |
 | MoE factor 非法/溢出/大于 active world | `MOE_GRID_INVALID` |
 | per-rank message 不能均匀投影完整/尾 group | `PLACEMENT_TRAFFIC_MESSAGE_NOT_DIVISIBLE` |
 | topology/ragged evidence ref 不闭合 | `*_EVIDENCE_INVALID` |
 | #19 composite 不匹配 | exit 3 / `TOPOLOGY_PLACEMENT_TARGET_WORKLOAD_REQUIRED` |
-| non-regular/digest mismatch/>256 KiB/unknown key | 独立 `TOPOLOGY_PLACEMENT_*` code |
+| unknown artifact reference key（I/O 前） | `TOPOLOGY_PLACEMENT_REFERENCE_INVALID` |
+| symlink/FIFO/device/digest mismatch/>256 KiB | 独立 `TOPOLOGY_PLACEMENT_*` code |
 
 这里的 `READY` 表示输入足以重现 traffic-only summary。它不意味着 topology 性能已由 NPU
 现场核验，也不意味着目标训练框架真的支持 ragged；exact lane 只能依据明确、绑定的目标
@@ -309,37 +331,40 @@ delta/local-hit；缺任一 candidate 都稳定拒绝。合法 Target Workload �
 |---|---|---|
 | ADR-0010 identity 分离 | 1,024 current 与 8,192 architecture 各自 identity/scope/evidence/digest | 两进程断言 digest/ref 不同及 domain 96/12 |
 | 三种资源语义 | typed 固定三元组，product 只允许 current | regular + exact + product Result exact equality |
-| attention/MoE 独立 grid；EP｜2048 | 独立 denominator/derived DP/EDP 与 stable gates | attention、MoE overflow、EP non-divisor 负例 |
+| attention/MoE 独立 grid；EP｜2048 | 完整 denominator、mixed-radix DP/EDP、#19 shard binding | TP=3、ETP=3、regular denominator 负例；ETP=2/PP=2 独立 oracle |
 | regular EP 128..2048 | exact ordered coverage、两 placement 共十候选 | candidate IDs 与 grid products 断言 |
-| exact evidence gate | `NOT_PROVIDED` unsupported；仅 verified supported | missing/SUPPORTED/evidence mismatch 三路径 |
-| candidate output 完整 | typed rank/group/matrix/cross/hit/resource summary | Python 逐 rank/逐 group oracle 复算全部 regular candidates |
+| exact evidence gate | 两套 subject-bound schema；generic record 不升级 | class/method/hardware/claim/source/四项 capability tamper |
+| candidate output 完整 | typed rank/十轴group/matrix/cross/hit/resource summary | Python 逐 rank/逐 folded group oracle；membership digest 独立复算 |
 | 两类 paired contrast | 五个 placement pairs + 每 placement 两个 expert pairs | pair set/delta/output 断言 |
 | 100k traffic-only | exact/product 真实公共进程，无 endpoint flows | wall/Result size、ragged tail、EP2048 exact oracle |
 | #19/#20 复用 | composite digest gate；每 group 调 typed projector | target mismatch 与 oracle/conservation |
 | 无 O(P²) resident state | rank map 仅 transient O(P)，每 projector 最大 EP=2048 | resident counters/Result size/RSS |
-| deterministic/content addressed | stable ordering、seed、SHA-256 provenance | identical Result equality；seed 只改变 flat map |
+| deterministic/content addressed | stable ordering、PRP v2、SHA-256 provenance | identical Result；seed sensitivity；退化 seed=48,768 反事实 |
+| reference/TOCTOU | exact `{path,sha256}`；single-fd open/fstat/read | unknown key 在 I/O 前拒绝；symlink/FIFO/device fail-closed |
 
-TDD 首个 RED 是 Result 缺 `topology_placement_analysis`；首个 GREEN 建立 typed module 与
-current-product identity/evidence。第二个 RED 是 flat/random 的五个 domain matrices 与
-独立枚举 oracle 不一致；修正 affine permutation 后全部 GREEN。第三个 RED 是 exact/
-product Result 缺目标框架 capability evidence；typed summary 补齐后 GREEN。所有 oracle
-只消费 Result 和测试输入，不调用 `AnalyzeTopologyPlacements` 或 `ProjectA2ATraffic`。
+原实现的 TDD 首个 RED 是 Result 缺 `topology_placement_analysis`；随后建立 typed module、
+独立枚举 oracle 与 exact capability gate。review-fix 在旧 binary 上另固化六个 RED：generic
+evidence 可升级、folded grid 缺完整字段、requested capability 早退为 `NOT_REQUIRED`、
+seed=48,768 退化、reference unknown key 被接受、symlink 被 follow。六项均由真实
+`SimAI_analytical` 进程转 GREEN。所有 oracle 只消费 Result 和测试输入，不调用
+`AnalyzeTopologyPlacements` 或 `ProjectA2ATraffic`。
 
 最终验证按正式 CMake glob/exclude 得到 56 个 Astra library sources 和 8 个 Analytical
-frontend sources，共 64 个源文件。C++11 全链接 PASS（16.79 s，最大 RSS 210,452,480 B），
+frontend sources，共 64 个源文件。review-fix 最终 C++11 全链接 PASS（15.70 s，最大 RSS
+211,091,456 B），
 二进制 SHA-256 为
-`fb022f5d009db8c7ac15bac3933474c0e4889e58b3f4dba661687c73367daed8`。新增 typed module
+`dd5f3e20e4964b2e3af1201206ec79521c2f7f23065d553398f467143a6b7c1f`。新增 typed module
 与 `RunContract.cc` 均通过 `-Wall -Wextra -Wpedantic -Werror`；后者只定向降级上游
 `AstraNetworkAPI.hh` 已存在的两个 `unused-parameter` warning。完整真实进程回归
-`122/122` PASS（53.357 s；外部最大 RSS 126,877,696 B）。
+`130/130` PASS（61.498 s；外部最大 RSS 117,030,912 B）。
 
-最终 100k exact traffic-only 单进程退出码为 0：进程 wall 0.838377 s，外部测量最大 RSS
-33,636,352 B，Result 705,247 B。它输出 10 candidates、98 active domains、96,040 个
+review-fix 最终 100k exact traffic-only 单进程退出码为 0：进程 wall 0.850298 s，外部
+测量最大 RSS 34,848,768 B，Result 754,733 B。它输出 10 candidates、98 active domains、96,040 个
 candidate matrix cells；最大单次 projector rank state 2,048、domain cells 9,604，常驻
 rank maps/endpoint flows 都是 0。`TOPOLOGY_AWARE_EP2048` 的独立 oracle 复算得到 global
 1,139,153,541,120 B、cross-domain 569,439,682,560 B、local hit
-0.5001203419864413、ragged tail 1,696 ranks，与 Result 完全一致。26 个仓库 JSON 文档均
-可解析；`git diff --check`、敏感信息扫描与 #25/#28/#29 scope scan PASS。
+0.5001203419864413、MoE full-grid 98,304 + ragged tail 1,696 ranks，与 Result 完全一致。
+JSON、digest、determinism、敏感信息与 #25/#28/#29 scope 门禁均为最终提交前必跑项。
 
 ## 8. 与 #20/#25/#28/#29 的边界
 
@@ -356,8 +381,8 @@ rank maps/endpoint flows 都是 0。`TOPOLOGY_AWARE_EP2048` 的独立 oracle 复
 
 - rank-map 和 memberships 以版本化 canonical formula + digest 输出，而不是常驻/输出
   100,000 项 map；这满足可重建性并控制 Result 大小。未来改变映射算法必须升级版本。
-- `VENDOR_SPEC/FIELD_UNVERIFIED` synthetic topology evidence 只用于合同和敏感性路径；
-  不能推导真实 bandwidth、latency、fault domain 或训练可行性。
+- 测试中的 synthetic `FIELD_VERIFIED` records 只验证 subject/digest/hardware closure 的
+  合同机制；不能推导真实 bandwidth、latency、fault domain、NPU 行为或训练可行性。
 - exact ragged evidence 是调用者声明并受内容摘要绑定的 capability contract；本票没有
   NPU 框架验证，不能替 #25/#28 声称完成训练或仿真。
 - traffic-only local-expert-hit 定义为 projected intra-domain bytes/global bytes；它是

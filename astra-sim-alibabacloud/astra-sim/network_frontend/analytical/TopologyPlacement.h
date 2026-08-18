@@ -19,10 +19,29 @@ enum class TopologyPlacementKind {
   Unsupported
 };
 
-struct TopologyPlacementEvidence {
+struct TopologyIdentityEvidence {
   std::string ref = "UNKNOWN";
   std::string evidence_class = "UNKNOWN";
   std::string readiness = "UNKNOWN";
+  std::string source_revision = "UNKNOWN";
+  std::string source_sha256 = "UNKNOWN";
+  std::string claim_sha256 = "UNKNOWN";
+  bool hardware_available = false;
+};
+
+struct RaggedFrameworkEvidence {
+  std::string ref = "UNKNOWN";
+  std::string evidence_class = "UNKNOWN";
+  std::string readiness = "UNKNOWN";
+  std::string framework = "UNKNOWN";
+  std::string source_revision = "UNKNOWN";
+  std::string source_sha256 = "UNKNOWN";
+  std::string claim_sha256 = "UNKNOWN";
+  bool non_uniform_process_groups = false;
+  bool tensor_shard_semantics = false;
+  bool expert_shard_semantics = false;
+  bool optimizer_state_semantics = false;
+  bool hardware_available = false;
 };
 
 struct TopologyPlacementConfig {
@@ -31,11 +50,13 @@ struct TopologyPlacementConfig {
   std::string artifact_sha256 = "UNKNOWN";
   size_t artifact_bytes_read = 0U;
   std::string target_workload_sha256 = "UNKNOWN";
+  int hidden_size = 0;
   int routed_experts = 0;
+  int expert_intermediate_size = 0;
   std::string topology_identity;
   std::string topology_scope;
   int domain_size_ranks = 0;
-  TopologyPlacementEvidence topology_evidence;
+  TopologyIdentityEvidence topology_evidence;
   std::string resource_scenario;
   std::string spare_semantics;
   int attention_tp = 0;
@@ -45,17 +66,21 @@ struct TopologyPlacementConfig {
   int moe_pp = 0;
   std::vector<int> ep_values;
   bool ragged_groups_supported = false;
-  TopologyPlacementEvidence ragged_evidence;
+  RaggedFrameworkEvidence ragged_evidence;
   std::vector<TopologyPlacementKind> placement_kinds;
   uint64_t flat_random_seed = 0U;
   uint64_t message_bytes_per_rank = 0U;
 };
 
 struct TopologyPlacementCommunicationGroup {
-  std::string grid;
+  std::string axis;
   std::string representation;
   std::string membership_formula;
   std::string membership_digest = "UNKNOWN";
+  int axis_size = 0;
+  int covered_ranks = 0;
+  int64_t full_grid_product = 0;
+  int ragged_tail_ranks = 0;
 };
 
 struct TopologyPlacementCandidateSummary {
@@ -65,16 +90,23 @@ struct TopologyPlacementCandidateSummary {
   std::string rank_map_algorithm;
   std::string rank_map_digest = "UNKNOWN";
   uint64_t flat_random_seed = 0U;
+  uint64_t rank_map_multiplier = 1U;
+  uint64_t rank_map_offset = 0U;
   int attention_tp = 0;
   int attention_cp = 0;
   int attention_dp = 0;
   int attention_pp = 0;
+  int64_t attention_full_grid_product = 0;
+  int attention_remainder_ranks = 0;
   int moe_etp = 0;
   int moe_ep = 0;
   int moe_edp = 0;
   int moe_pp = 0;
+  int64_t moe_full_grid_product = 0;
+  int moe_remainder_ranks = 0;
   bool ragged = false;
   int full_ep_groups = 0;
+  int partial_ep_groups = 0;
   int partial_ep_group_ranks = 0;
   std::vector<TopologyPlacementCommunicationGroup> communication_groups;
   std::vector<uint64_t> domain_matrix_bytes;
@@ -117,14 +149,14 @@ struct TopologyPlacementSummary {
   int domain_count = 0;
   int full_domain_count = 0;
   int partial_domain_active_ranks = 0;
-  TopologyPlacementEvidence topology_evidence;
+  TopologyIdentityEvidence topology_evidence;
   std::string resource_scenario;
   int active_ranks = 0;
   int capacity_ranks = 0;
   int spare_ranks = 0;
   std::string spare_semantics;
   bool ragged_groups_supported = false;
-  TopologyPlacementEvidence ragged_evidence;
+  RaggedFrameworkEvidence ragged_evidence;
   std::string artifact_id;
   std::string artifact_sha256 = "UNKNOWN";
   size_t artifact_bytes_read = 0U;

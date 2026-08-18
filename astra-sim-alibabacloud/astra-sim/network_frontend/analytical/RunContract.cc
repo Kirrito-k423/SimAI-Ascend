@@ -12,6 +12,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <cerrno>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -24,6 +25,7 @@
 #include <string>
 #include <vector>
 
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -163,6 +165,65 @@ enum class BoundedReadResult {
   Unreadable,
   TooLarge,
 };
+
+enum class RegularBoundedReadResult {
+  Success,
+  Unreadable,
+  NotRegular,
+  TooLarge,
+};
+
+RegularBoundedReadResult ReadRegularFileWithMaximumBytes(
+    const std::string& path,
+    size_t maximum_bytes,
+    std::string* content) {
+  int flags = O_RDONLY | O_NONBLOCK;
+#if defined(O_CLOEXEC)
+  flags |= O_CLOEXEC;
+#endif
+#if defined(O_NOFOLLOW)
+  flags |= O_NOFOLLOW;
+#endif
+  const int descriptor = open(path.c_str(), flags);
+  if (descriptor < 0) {
+    return errno == ELOOP ? RegularBoundedReadResult::NotRegular
+                          : RegularBoundedReadResult::Unreadable;
+  }
+  struct stat file_stat;
+  if (fstat(descriptor, &file_stat) != 0) {
+    close(descriptor);
+    return RegularBoundedReadResult::Unreadable;
+  }
+  if (!S_ISREG(file_stat.st_mode)) {
+    close(descriptor);
+    return RegularBoundedReadResult::NotRegular;
+  }
+  if (file_stat.st_size < 0 ||
+      static_cast<uint64_t>(file_stat.st_size) > maximum_bytes) {
+    close(descriptor);
+    return RegularBoundedReadResult::TooLarge;
+  }
+  content->clear();
+  std::array<char, 8192> buffer = {{'\0'}};
+  while (true) {
+    const size_t remaining = maximum_bytes - content->size();
+    const size_t requested = std::min(buffer.size(), remaining + 1U);
+    const ssize_t bytes_read = read(descriptor, buffer.data(), requested);
+    if (bytes_read > 0) {
+      content->append(buffer.data(), static_cast<size_t>(bytes_read));
+      if (content->size() > maximum_bytes) {
+        close(descriptor);
+        return RegularBoundedReadResult::TooLarge;
+      }
+    } else if (bytes_read == 0) {
+      close(descriptor);
+      return RegularBoundedReadResult::Success;
+    } else if (errno != EINTR) {
+      close(descriptor);
+      return RegularBoundedReadResult::Unreadable;
+    }
+  }
+}
 
 BoundedReadResult ReadFileWithMaximumBytes(
     const std::string& path,
@@ -1333,6 +1394,7 @@ struct ValidatedTargetModel {
   uint64_t active_main_blocks_parameters = 0;
   uint64_t active_main_forward_parameters = 0;
   uint64_t active_training_graph_parameters = 0;
+  int hidden_size = 0;
   int routed_experts = 0;
   int top_k = 0;
   int expert_intermediate_size = 0;
@@ -1519,7 +1581,6 @@ bool ValidateTargetModel(
   std::string auxiliary_unit;
   std::string checkpoint_unit;
   std::string checkpoint_semantics;
-  int hidden_size = 0;
   int main_moe_layers = 0;
   int mtp_moe_layers = 0;
   int hash_routed_main_layers = 0;
@@ -1612,7 +1673,8 @@ bool ValidateTargetModel(
       !StringMember(*source, "officialHeaderDigest", &source_header_digest) ||
       source_header_digest !=
           "sha256:a3a39b9ccb4e729851922fc9c770f5c5755e7b9d7e96cd02c23f0e12b5e25cb9" ||
-      !ExactPositiveIntMember(*architecture, "hiddenSize", &hidden_size) ||
+      !ExactPositiveIntMember(
+          *architecture, "hiddenSize", &validated->hidden_size) ||
       !ExactPositiveIntMember(
           *architecture, "mainMoeLayers", &main_moe_layers) ||
       !ExactPositiveIntMember(
@@ -1876,7 +1938,7 @@ bool ValidateTargetModel(
         "Restore the frozen logical/storage shapes, dtypes, roles, and scopes.");
     return false;
   }
-  if (hidden_size != 7168 || main_moe_layers != 61 ||
+  if (validated->hidden_size != 7168 || main_moe_layers != 61 ||
       mtp_moe_layers != 1 || hash_routed_main_layers != 3 ||
       baseline_routed_experts != 384 || validated->routed_experts != 2048 ||
       validated->top_k != 16 ||
@@ -1970,6 +2032,7 @@ bool LoadTargetModel(
       model.active_main_forward_parameters;
   contract->target_active_training_graph_parameters =
       model.active_training_graph_parameters;
+  contract->target_hidden_size = model.hidden_size;
   contract->target_routed_experts = model.routed_experts;
   contract->target_top_k = model.top_k;
   contract->target_expert_intermediate_size = model.expert_intermediate_size;
@@ -5665,6 +5728,175 @@ std::string TopologyPlacementSha256Identifier(const std::string& input) {
   return "sha256:" + Sha256Hex(input);
 }
 
+bool ParseTopologyIdentityEvidence(
+    const JsonValue& topology,
+    const std::string& identity,
+    int domain_size_ranks,
+    TopologyIdentityEvidence* parsed) {
+  const JsonValue* evidence = Member(topology, "evidence");
+  std::string evidence_ref;
+  if (!StringMember(topology, "evidenceRef", &evidence_ref) ||
+      evidence == nullptr || evidence->type != JsonValue::Type::Array ||
+      evidence->array.size() != 1U) {
+    return false;
+  }
+  const JsonValue& record = evidence->array.front();
+  const JsonValue* source = Member(record, "source");
+  const JsonValue* method = Member(record, "method");
+  const JsonValue* subject = Member(record, "subject");
+  const JsonValue* conditions = Member(record, "conditions");
+  std::string source_uri;
+  std::string method_name;
+  std::string method_version;
+  std::string subject_identity;
+  std::string as_of;
+  std::string sanitization;
+  int subject_domain_size = 0;
+  if (!ObjectHasExactKeys(
+          record,
+          {"id", "class", "readiness", "source", "method", "subject",
+           "asOf", "conditions", "sanitization"}) ||
+      !StringMember(record, "id", &parsed->ref) ||
+      parsed->ref != evidence_ref || !IsSafeRunId(parsed->ref) ||
+      !StringMember(record, "class", &parsed->evidence_class) ||
+      parsed->evidence_class != "VENDOR_SPEC" ||
+      !StringMember(record, "readiness", &parsed->readiness) ||
+      parsed->readiness != "FIELD_VERIFIED" || source == nullptr ||
+      !ObjectHasExactKeys(*source, {"uri", "revision", "sha256"}) ||
+      !StringMember(*source, "uri", &source_uri) || source_uri.empty() ||
+      !StringMember(*source, "revision", &parsed->source_revision) ||
+      !IsSafeRunId(parsed->source_revision) ||
+      !StringMember(*source, "sha256", &parsed->source_sha256) ||
+      !IsSha256Identifier(parsed->source_sha256) || method == nullptr ||
+      !ObjectHasExactKeys(*method, {"name", "version"}) ||
+      !StringMember(*method, "name", &method_name) ||
+      method_name != "topology-identity-claim-audit" ||
+      !StringMember(*method, "version", &method_version) ||
+      method_version != "1" || subject == nullptr ||
+      !ObjectHasExactKeys(
+          *subject, {"identity", "domainSizeRanks", "claimSha256"}) ||
+      !StringMember(*subject, "identity", &subject_identity) ||
+      subject_identity != identity ||
+      !ExactPositiveIntMember(
+          *subject, "domainSizeRanks", &subject_domain_size) ||
+      subject_domain_size != domain_size_ranks ||
+      !StringMember(*subject, "claimSha256", &parsed->claim_sha256) ||
+      !IsSha256Identifier(parsed->claim_sha256) ||
+      !StringMember(record, "asOf", &as_of) || as_of.empty() ||
+      conditions == nullptr ||
+      !ObjectHasExactKeys(*conditions, {"hardwareAvailable"}) ||
+      !BooleanMember(
+          *conditions, "hardwareAvailable", &parsed->hardware_available) ||
+      !parsed->hardware_available ||
+      !StringMember(record, "sanitization", &sanitization) ||
+      sanitization.empty()) {
+    return false;
+  }
+  std::ostringstream canonical;
+  canonical << "simai.topology-identity-claim/v1|" << identity << "|"
+            << domain_size_ranks << "|" << parsed->source_revision << "|"
+            << parsed->source_sha256;
+  return parsed->claim_sha256 == TopologyPlacementSha256Identifier(
+      canonical.str());
+}
+
+bool ParseRaggedFrameworkEvidence(
+    const JsonValue& ragged,
+    RaggedFrameworkEvidence* parsed) {
+  const JsonValue* evidence = Member(ragged, "evidence");
+  std::string evidence_ref;
+  if (!StringMember(ragged, "evidenceRef", &evidence_ref) ||
+      evidence == nullptr || evidence->type != JsonValue::Type::Array ||
+      evidence->array.size() != 1U) {
+    return false;
+  }
+  const JsonValue& record = evidence->array.front();
+  const JsonValue* source = Member(record, "source");
+  const JsonValue* method = Member(record, "method");
+  const JsonValue* subject = Member(record, "subject");
+  const JsonValue* claims = Member(record, "claims");
+  const JsonValue* conditions = Member(record, "conditions");
+  std::string source_uri;
+  std::string method_name;
+  std::string method_version;
+  std::string subject_revision;
+  std::string subject_sha256;
+  std::string as_of;
+  std::string sanitization;
+  if (!ObjectHasExactKeys(
+          record,
+          {"id", "class", "readiness", "source", "method", "subject",
+           "claims", "asOf", "conditions", "sanitization"}) ||
+      !StringMember(record, "id", &parsed->ref) ||
+      parsed->ref != evidence_ref || !IsSafeRunId(parsed->ref) ||
+      !StringMember(record, "class", &parsed->evidence_class) ||
+      parsed->evidence_class != "SOURCE_CODE_AUDIT" ||
+      !StringMember(record, "readiness", &parsed->readiness) ||
+      parsed->readiness != "FIELD_VERIFIED" || source == nullptr ||
+      !ObjectHasExactKeys(*source, {"uri", "revision", "sha256"}) ||
+      !StringMember(*source, "uri", &source_uri) || source_uri.empty() ||
+      !StringMember(*source, "revision", &parsed->source_revision) ||
+      !IsSafeRunId(parsed->source_revision) ||
+      !StringMember(*source, "sha256", &parsed->source_sha256) ||
+      !IsSha256Identifier(parsed->source_sha256) || method == nullptr ||
+      !ObjectHasExactKeys(*method, {"name", "version"}) ||
+      !StringMember(*method, "name", &method_name) ||
+      method_name != "target-framework-ragged-capability-audit" ||
+      !StringMember(*method, "version", &method_version) ||
+      method_version != "1" || subject == nullptr ||
+      !ObjectHasExactKeys(
+          *subject, {"framework", "sourceRevision", "sourceSha256"}) ||
+      !StringMember(*subject, "framework", &parsed->framework) ||
+      parsed->framework != "TARGET_ASCEND_TRAINING_FRAMEWORK" ||
+      !StringMember(*subject, "sourceRevision", &subject_revision) ||
+      subject_revision != parsed->source_revision ||
+      !StringMember(*subject, "sourceSha256", &subject_sha256) ||
+      subject_sha256 != parsed->source_sha256 || claims == nullptr ||
+      !ObjectHasExactKeys(
+          *claims,
+          {"nonUniformProcessGroups", "tensorShardSemantics",
+           "expertShardSemantics", "optimizerStateSemantics",
+           "claimSha256"}) ||
+      !BooleanMember(
+          *claims,
+          "nonUniformProcessGroups",
+          &parsed->non_uniform_process_groups) ||
+      !parsed->non_uniform_process_groups ||
+      !BooleanMember(
+          *claims, "tensorShardSemantics", &parsed->tensor_shard_semantics) ||
+      !parsed->tensor_shard_semantics ||
+      !BooleanMember(
+          *claims, "expertShardSemantics", &parsed->expert_shard_semantics) ||
+      !parsed->expert_shard_semantics ||
+      !BooleanMember(
+          *claims,
+          "optimizerStateSemantics",
+          &parsed->optimizer_state_semantics) ||
+      !parsed->optimizer_state_semantics ||
+      !StringMember(*claims, "claimSha256", &parsed->claim_sha256) ||
+      !IsSha256Identifier(parsed->claim_sha256) ||
+      !StringMember(record, "asOf", &as_of) || as_of.empty() ||
+      conditions == nullptr ||
+      !ObjectHasExactKeys(*conditions, {"hardwareAvailable"}) ||
+      !BooleanMember(
+          *conditions, "hardwareAvailable", &parsed->hardware_available) ||
+      !parsed->hardware_available ||
+      !StringMember(record, "sanitization", &sanitization) ||
+      sanitization.empty()) {
+    return false;
+  }
+  std::ostringstream canonical;
+  canonical << "simai.ragged-framework-capability-claim/v1|"
+            << parsed->framework << "|" << parsed->source_revision << "|"
+            << parsed->source_sha256
+            << "|non_uniform_process_groups=true"
+            << "|tensor_shard_semantics=true"
+            << "|expert_shard_semantics=true"
+            << "|optimizer_state_semantics=true";
+  return parsed->claim_sha256 == TopologyPlacementSha256Identifier(
+      canonical.str());
+}
+
 bool LoadTopologyPlacement(
     const JsonValue& root,
     AnalyticalRunContract* contract) {
@@ -5672,6 +5904,8 @@ bool LoadTopologyPlacement(
   if (envelope == nullptr) {
     return true;
   }
+  contract->topology_placement.present = true;
+  contract->topology_placement_summary.present = true;
   std::string schema_version;
   const JsonValue* artifact_reference = Member(*envelope, "artifact");
   if (!ObjectHasExactKeys(*envelope, {"schema_version", "artifact"}) ||
@@ -5687,11 +5921,23 @@ bool LoadTopologyPlacement(
   }
   std::string artifact_path;
   std::string declared_digest;
-  struct stat artifact_stat;
-  if (!ParseArtifactReference(
-          *artifact_reference, &artifact_path, &declared_digest) ||
-      stat(artifact_path.c_str(), &artifact_stat) != 0 ||
-      !S_ISREG(artifact_stat.st_mode)) {
+  if (!ObjectHasExactKeys(*artifact_reference, {"path", "sha256"}) ||
+      !ParseArtifactReference(
+          *artifact_reference, &artifact_path, &declared_digest)) {
+    Reject(
+        contract,
+        "TOPOLOGY_PLACEMENT_REFERENCE_INVALID",
+        "The topology placement artifact reference is invalid.",
+        "Provide exactly artifact.path and sha256:<64 lowercase hex digits>.");
+    return false;
+  }
+  std::string artifact_content;
+  const RegularBoundedReadResult read_result =
+      ReadRegularFileWithMaximumBytes(
+          artifact_path,
+          kMaximumTopologyPlacementArtifactBytes,
+          &artifact_content);
+  if (read_result == RegularBoundedReadResult::NotRegular) {
     Reject(
         contract,
         "TOPOLOGY_PLACEMENT_ARTIFACT_NOT_REGULAR",
@@ -5699,29 +5945,39 @@ bool LoadTopologyPlacement(
         "Provide one bounded content-addressed regular JSON file.");
     return false;
   }
-  const ArtifactLoadPolicy artifact_policy = {
-      "TOPOLOGY_PLACEMENT_REFERENCE_INVALID",
-      "The topology placement artifact reference is invalid.",
-      "Provide artifact.path and sha256:<64 lowercase hex digits>.",
-      "TOPOLOGY_PLACEMENT_ARTIFACT_NOT_FOUND",
-      "The topology placement artifact could not be read.",
-      "Provide a readable immutable regular file.",
-      "TOPOLOGY_PLACEMENT_ARTIFACT_DIGEST_MISMATCH",
-      "The topology placement artifact differs from its digest.",
-      "Use the intended immutable artifact and digest.",
-      "TOPOLOGY_PLACEMENT_ARTIFACT_INVALID_JSON",
-      "The topology placement artifact is not valid JSON.",
-      "Correct the JSON syntax and retry."};
+  if (read_result == RegularBoundedReadResult::TooLarge) {
+    Reject(
+        contract,
+        "TOPOLOGY_PLACEMENT_ARTIFACT_TOO_LARGE",
+        "The topology placement artifact exceeds 256 KiB.",
+        "Use a bounded topology placement artifact no larger than 256 KiB.");
+    return false;
+  }
+  if (read_result != RegularBoundedReadResult::Success) {
+    Reject(
+        contract,
+        "TOPOLOGY_PLACEMENT_ARTIFACT_NOT_FOUND",
+        "The topology placement artifact could not be read.",
+        "Provide a readable immutable regular file.");
+    return false;
+  }
   LoadedArtifact artifact;
-  if (!LoadArtifact(
-          *artifact_reference,
-          artifact_policy,
-          contract,
-          &artifact,
-          kMaximumTopologyPlacementArtifactBytes,
-          "TOPOLOGY_PLACEMENT_ARTIFACT_TOO_LARGE",
-          "The topology placement artifact exceeds 256 KiB.",
-          "Use a bounded topology placement artifact no larger than 256 KiB.")) {
+  artifact.sha256 = "sha256:" + Sha256Hex(artifact_content);
+  artifact.bytes_read = artifact_content.size();
+  if (artifact.sha256 != declared_digest) {
+    Reject(
+        contract,
+        "TOPOLOGY_PLACEMENT_ARTIFACT_DIGEST_MISMATCH",
+        "The topology placement artifact differs from its digest.",
+        "Use the intended immutable artifact and digest.");
+    return false;
+  }
+  if (!ParseJsonDocument(artifact_content, &artifact.document)) {
+    Reject(
+        contract,
+        "TOPOLOGY_PLACEMENT_ARTIFACT_INVALID_JSON",
+        "The topology placement artifact is not valid JSON.",
+        "Correct the JSON syntax and retry.");
     return false;
   }
   const JsonValue* metadata = Member(artifact.document, "metadata");
@@ -5827,21 +6083,11 @@ bool LoadTopologyPlacement(
     return false;
   }
 
-  const JsonValue* topology_evidence = Member(*topology, "evidence");
-  std::string topology_evidence_ref;
-  bool topology_hardware_available = false;
-  if (!StringMember(
-          *topology, "evidenceRef", &topology_evidence_ref) ||
-      topology_evidence == nullptr ||
-      topology_evidence->type != JsonValue::Type::Array ||
-      topology_evidence->array.size() != 1U ||
-      !A2EvidenceRecordIsExact(
-          topology_evidence->array.front(),
-          &parsed.topology_evidence.ref,
-          &parsed.topology_evidence.evidence_class,
-          &parsed.topology_evidence.readiness,
-          &topology_hardware_available) ||
-      topology_evidence_ref != parsed.topology_evidence.ref) {
+  if (!ParseTopologyIdentityEvidence(
+          *topology,
+          parsed.topology_identity,
+          parsed.domain_size_ranks,
+          &parsed.topology_evidence)) {
     Reject(
         contract,
         "TOPOLOGY_IDENTITY_EVIDENCE_INVALID",
@@ -5909,13 +6155,12 @@ bool LoadTopologyPlacement(
     }
   }
 
-  const JsonValue* ragged_evidence = Member(*ragged, "evidence");
   std::string ragged_state;
   std::string ragged_evidence_ref;
   if (!StringMember(*ragged, "state", &ragged_state) ||
       !StringMember(*ragged, "evidenceRef", &ragged_evidence_ref) ||
-      ragged_evidence == nullptr ||
-      ragged_evidence->type != JsonValue::Type::Array) {
+      Member(*ragged, "evidence") == nullptr ||
+      Member(*ragged, "evidence")->type != JsonValue::Type::Array) {
     Reject(
         contract,
         "RAGGED_FRAMEWORK_CAPABILITY_SCHEMA_INVALID",
@@ -5925,7 +6170,7 @@ bool LoadTopologyPlacement(
   }
   if (ragged_state == "NOT_PROVIDED") {
     if (ragged_evidence_ref != "NOT_PROVIDED" ||
-        !ragged_evidence->array.empty()) {
+        !Member(*ragged, "evidence")->array.empty()) {
       Reject(
           contract,
           "RAGGED_FRAMEWORK_CAPABILITY_EVIDENCE_INVALID",
@@ -5934,16 +6179,8 @@ bool LoadTopologyPlacement(
       return false;
     }
   } else if (ragged_state == "SUPPORTED") {
-    bool ragged_hardware_available = false;
-    if (ragged_evidence->array.size() != 1U ||
-        !A2EvidenceRecordIsExact(
-            ragged_evidence->array.front(),
-            &parsed.ragged_evidence.ref,
-            &parsed.ragged_evidence.evidence_class,
-            &parsed.ragged_evidence.readiness,
-            &ragged_hardware_available) ||
-        parsed.ragged_evidence.ref != ragged_evidence_ref ||
-        parsed.ragged_evidence.readiness != "FIELD_VERIFIED") {
+    if (!ParseRaggedFrameworkEvidence(
+            *ragged, &parsed.ragged_evidence)) {
       Reject(
           contract,
           "RAGGED_FRAMEWORK_CAPABILITY_EVIDENCE_INVALID",
@@ -5971,6 +6208,9 @@ bool LoadTopologyPlacement(
     return false;
   }
   parsed.routed_experts = contract->target_routed_experts;
+  parsed.hidden_size = contract->target_hidden_size;
+  parsed.expert_intermediate_size =
+      contract->target_expert_intermediate_size;
   contract->topology_placement = parsed;
   TopologyPlacementSummary summary;
   if (!AnalyzeTopologyPlacements(
@@ -6225,7 +6465,16 @@ void WriteTopologyPlacementResult(
       << ", \"class\": "
       << Quote(summary.topology_evidence.evidence_class)
       << ", \"readiness\": "
-      << Quote(summary.topology_evidence.readiness) << "}}, "
+      << Quote(summary.topology_evidence.readiness)
+      << ", \"source_revision\": "
+      << Quote(summary.topology_evidence.source_revision)
+      << ", \"source_sha256\": "
+      << Quote(summary.topology_evidence.source_sha256)
+      << ", \"claim_sha256\": "
+      << Quote(summary.topology_evidence.claim_sha256)
+      << ", \"hardware_available\": "
+      << (summary.topology_evidence.hardware_available ? "true" : "false")
+      << "}}, "
       << "\"resource_scenario\": {\"kind\": "
       << Quote(summary.resource_scenario)
       << ", \"active_ranks\": " << summary.active_ranks
@@ -6243,6 +6492,27 @@ void WriteTopologyPlacementResult(
       << Quote(summary.ragged_evidence.ref)
       << ", \"class\": " << Quote(summary.ragged_evidence.evidence_class)
       << ", \"readiness\": " << Quote(summary.ragged_evidence.readiness)
+      << ", \"framework\": " << Quote(summary.ragged_evidence.framework)
+      << ", \"source_revision\": "
+      << Quote(summary.ragged_evidence.source_revision)
+      << ", \"source_sha256\": "
+      << Quote(summary.ragged_evidence.source_sha256)
+      << ", \"claim_sha256\": "
+      << Quote(summary.ragged_evidence.claim_sha256)
+      << ", \"claims\": {\"non_uniform_process_groups\": "
+      << (summary.ragged_evidence.non_uniform_process_groups
+              ? "true"
+              : "false")
+      << ", \"tensor_shard_semantics\": "
+      << (summary.ragged_evidence.tensor_shard_semantics ? "true" : "false")
+      << ", \"expert_shard_semantics\": "
+      << (summary.ragged_evidence.expert_shard_semantics ? "true" : "false")
+      << ", \"optimizer_state_semantics\": "
+      << (summary.ragged_evidence.optimizer_state_semantics
+              ? "true"
+              : "false")
+      << "}, \"hardware_available\": "
+      << (summary.ragged_evidence.hardware_available ? "true" : "false")
       << "}}}, "
       << "\"parallel_grid_contract\": {"
       << "\"attention_formula\": \"N=TP*CP*DP*PP\", "
@@ -6250,6 +6520,12 @@ void WriteTopologyPlacementResult(
       << "\"routed_experts\": "
       << contract.topology_placement.routed_experts
       << ", \"ep_must_divide_routed_experts\": true, "
+      << "\"model_shard_contract\": {\"hidden_size\": "
+      << contract.topology_placement.hidden_size
+      << ", \"expert_intermediate_size\": "
+      << contract.topology_placement.expert_intermediate_size
+      << ", \"tp_power_of_two_and_divides_hidden_size\": true, "
+      << "\"etp_power_of_two_and_divides_expert_intermediate_size\": true}, "
       << "\"regular_ep_coverage\": [";
   for (size_t index = 0U;
        index < contract.topology_placement.ep_values.size();
@@ -6277,20 +6553,29 @@ void WriteTopologyPlacementResult(
         << Quote(candidate.rank_map_digest)
         << ", \"algorithm\": " << Quote(candidate.rank_map_algorithm)
         << ", \"flat_random_seed\": " << candidate.flat_random_seed
+        << ", \"multiplier\": " << candidate.rank_map_multiplier
+        << ", \"offset\": " << candidate.rank_map_offset
         << "}, \"attention_grid\": {\"tp\": "
         << candidate.attention_tp << ", \"cp\": "
         << candidate.attention_cp << ", \"dp\": "
         << candidate.attention_dp << ", \"pp\": "
         << candidate.attention_pp << ", \"product\": "
-        << static_cast<int64_t>(candidate.attention_tp) *
-               candidate.attention_cp * candidate.attention_dp *
-               candidate.attention_pp
+        << candidate.attention_full_grid_product
+        << ", \"full_grid_product\": "
+        << candidate.attention_full_grid_product
+        << ", \"remainder_ranks\": "
+        << candidate.attention_remainder_ranks
         << "}, \"moe_grid\": {\"etp\": " << candidate.moe_etp
         << ", \"ep\": " << candidate.moe_ep
         << ", \"edp\": " << candidate.moe_edp
         << ", \"pp\": " << candidate.moe_pp
+        << ", \"full_grid_product\": "
+        << candidate.moe_full_grid_product
+        << ", \"remainder_ranks\": "
+        << candidate.moe_remainder_ranks
         << ", \"ragged\": " << (candidate.ragged ? "true" : "false")
         << ", \"full_ep_groups\": " << candidate.full_ep_groups
+        << ", \"partial_ep_groups\": " << candidate.partial_ep_groups
         << ", \"partial_ep_group_ranks\": "
         << candidate.partial_ep_group_ranks << "}, "
         << "\"communication_groups\": [";
@@ -6302,12 +6587,17 @@ void WriteTopologyPlacementResult(
       }
       const TopologyPlacementCommunicationGroup& group =
           candidate.communication_groups[group_index];
-      output << "{\"grid\": " << Quote(group.grid)
+      output << "{\"axis\": " << Quote(group.axis)
              << ", \"representation\": " << Quote(group.representation)
              << ", \"membership_formula\": "
              << Quote(group.membership_formula)
              << ", \"membership_digest\": "
-             << Quote(group.membership_digest) << "}";
+             << Quote(group.membership_digest)
+             << ", \"axis_size\": " << group.axis_size
+             << ", \"covered_ranks\": " << group.covered_ranks
+             << ", \"full_grid_product\": " << group.full_grid_product
+             << ", \"ragged_tail_ranks\": "
+             << group.ragged_tail_ranks << "}";
     }
     output << "], \"domain_matrix_B\": [";
     for (size_t source = 0U; source < domain_count; ++source) {

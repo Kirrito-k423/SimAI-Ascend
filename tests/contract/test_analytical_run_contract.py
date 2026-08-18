@@ -932,6 +932,7 @@ class AnalyticalRunContractTest(unittest.TestCase):
         atomic_workload_replacement=None,
         topology_placement=None,
         bind_topology_target=True,
+        topology_via_symlink=False,
     ):
         """Rebind all Target Workload digests, then run the real process."""
         model = json.loads(
@@ -1099,10 +1100,14 @@ class AnalyticalRunContractTest(unittest.TestCase):
                         )
                     topology_content = " " * padding + topology_content
                 topology_path.write_text(topology_content)
+                topology_reference_path = topology_path
+                if topology_via_symlink:
+                    topology_reference_path = run_directory / "topology-link.json"
+                    topology_reference_path.symlink_to(topology_path.name)
                 manifest["topology_placement"] = {
                     "schema_version": "simai.topology-placement.request/v1alpha1",
                     "artifact": {
-                        "path": str(topology_path),
+                        "path": str(topology_reference_path),
                         "sha256": "sha256:"
                         + hashlib.sha256(topology_path.read_bytes()).hexdigest(),
                     },
@@ -1198,7 +1203,14 @@ class AnalyticalRunContractTest(unittest.TestCase):
         topology_identity="CURRENT_PRODUCT_SUPERPOD_1024",
         resource_scenario="REGULAR_98304",
         ragged_capability="NOT_PROVIDED",
+        subject_bound_evidence=True,
+        subject_bound_topology_evidence=None,
+        subject_bound_ragged_evidence=None,
     ):
+        if subject_bound_topology_evidence is None:
+            subject_bound_topology_evidence = subject_bound_evidence
+        if subject_bound_ragged_evidence is None:
+            subject_bound_ragged_evidence = subject_bound_evidence
         domain_size = (
             1024
             if topology_identity == "CURRENT_PRODUCT_SUPERPOD_1024"
@@ -1214,28 +1226,132 @@ class AnalyticalRunContractTest(unittest.TestCase):
             if topology_scope == "CURRENT_PRODUCT"
             else "architecture-limit-topology-evidence"
         )
+        topology_source_revision = topology_identity.lower() + "-source-v1"
+        topology_source_sha256 = "sha256:" + hashlib.sha256(
+            ("synthetic topology source " + topology_source_revision).encode()
+        ).hexdigest()
+        topology_claim_sha256 = "sha256:" + hashlib.sha256(
+            (
+                "simai.topology-identity-claim/v1|"
+                + topology_identity
+                + "|"
+                + str(domain_size)
+                + "|"
+                + topology_source_revision
+                + "|"
+                + topology_source_sha256
+            ).encode()
+        ).hexdigest()
+        if subject_bound_topology_evidence:
+            topology_evidence_record = {
+                "id": topology_evidence_id,
+                "class": "VENDOR_SPEC",
+                "readiness": "FIELD_VERIFIED",
+                "source": {
+                    "uri": "fixture://issue-24/topology-identity-source",
+                    "revision": topology_source_revision,
+                    "sha256": topology_source_sha256,
+                },
+                "method": {
+                    "name": "topology-identity-claim-audit",
+                    "version": "1",
+                },
+                "subject": {
+                    "identity": topology_identity,
+                    "domainSizeRanks": domain_size,
+                    "claimSha256": topology_claim_sha256,
+                },
+                "asOf": "2026-08-19T00:00:00+08:00",
+                "conditions": {"hardwareAvailable": True},
+                "sanitization": "synthetic-contract-test-no-host-data",
+            }
+        else:
+            topology_evidence_record = {
+                "id": topology_evidence_id,
+                "class": "VENDOR_SPEC",
+                "readiness": "FIELD_UNVERIFIED",
+                "source": {
+                    "uri": "fixture://issue-24/topology-identity",
+                    "ref": topology_identity.lower(),
+                },
+                "method": {
+                    "name": "synthetic-topology-contract",
+                    "version": "1",
+                },
+                "asOf": "2026-08-19T00:00:00+08:00",
+                "conditions": {"hardwareAvailable": False},
+                "sanitization": "synthetic-no-host-data",
+            }
         capability_evidence = []
         capability_evidence_ref = "NOT_PROVIDED"
         if ragged_capability == "SUPPORTED":
             capability_evidence_ref = "target-framework-ragged-evidence"
-            capability_evidence = [
-                {
+            if subject_bound_ragged_evidence:
+                framework_revision = "fixture-target-framework-revision-v1"
+                framework_sha256 = "sha256:" + hashlib.sha256(
+                    b"synthetic target framework ragged implementation v1"
+                ).hexdigest()
+                capability_claim_sha256 = "sha256:" + hashlib.sha256(
+                    (
+                        "simai.ragged-framework-capability-claim/v1|"
+                        + "TARGET_ASCEND_TRAINING_FRAMEWORK|"
+                        + framework_revision
+                        + "|"
+                        + framework_sha256
+                        + "|non_uniform_process_groups=true"
+                        + "|tensor_shard_semantics=true"
+                        + "|expert_shard_semantics=true"
+                        + "|optimizer_state_semantics=true"
+                    ).encode()
+                ).hexdigest()
+                capability_evidence = [{
                     "id": capability_evidence_ref,
-                    "class": "USER_INPUT",
+                    "class": "SOURCE_CODE_AUDIT",
                     "readiness": "FIELD_VERIFIED",
                     "source": {
-                        "uri": "fixture://issue-24/framework-ragged-capability",
-                        "ref": "contract-path-only-v1",
+                        "uri": "fixture://issue-24/target-framework-source",
+                        "revision": framework_revision,
+                        "sha256": framework_sha256,
                     },
                     "method": {
-                        "name": "synthetic-capability-contract",
+                        "name": "target-framework-ragged-capability-audit",
                         "version": "1",
                     },
+                    "subject": {
+                        "framework": "TARGET_ASCEND_TRAINING_FRAMEWORK",
+                        "sourceRevision": framework_revision,
+                        "sourceSha256": framework_sha256,
+                    },
+                    "claims": {
+                        "nonUniformProcessGroups": True,
+                        "tensorShardSemantics": True,
+                        "expertShardSemantics": True,
+                        "optimizerStateSemantics": True,
+                        "claimSha256": capability_claim_sha256,
+                    },
                     "asOf": "2026-08-19T00:00:00+08:00",
-                    "conditions": {"hardwareAvailable": False},
-                    "sanitization": "synthetic-no-host-data",
-                }
-            ]
+                    "conditions": {"hardwareAvailable": True},
+                    "sanitization": "synthetic-contract-test-no-host-data",
+                }]
+            else:
+                capability_evidence = [
+                    {
+                        "id": capability_evidence_ref,
+                        "class": "USER_INPUT",
+                        "readiness": "FIELD_VERIFIED",
+                        "source": {
+                            "uri": "fixture://issue-24/framework-ragged-capability",
+                            "ref": "contract-path-only-v1",
+                        },
+                        "method": {
+                            "name": "synthetic-capability-contract",
+                            "version": "1",
+                        },
+                        "asOf": "2026-08-19T00:00:00+08:00",
+                        "conditions": {"hardwareAvailable": False},
+                        "sanitization": "synthetic-no-host-data",
+                    }
+                ]
         return {
             "apiVersion": "simai.ascend.topology-placement/v1alpha1",
             "kind": "TopologyPlacementAnalysis",
@@ -1248,24 +1364,7 @@ class AnalyticalRunContractTest(unittest.TestCase):
                     "scope": topology_scope,
                     "domainSizeRanks": domain_size,
                     "evidenceRef": topology_evidence_id,
-                    "evidence": [
-                        {
-                            "id": topology_evidence_id,
-                            "class": "VENDOR_SPEC",
-                            "readiness": "FIELD_UNVERIFIED",
-                            "source": {
-                                "uri": "fixture://issue-24/topology-identity",
-                                "ref": topology_identity.lower(),
-                            },
-                            "method": {
-                                "name": "synthetic-topology-contract",
-                                "version": "1",
-                            },
-                            "asOf": "2026-08-19T00:00:00+08:00",
-                            "conditions": {"hardwareAvailable": False},
-                            "sanitization": "synthetic-no-host-data",
-                        }
-                    ],
+                    "evidence": [topology_evidence_record],
                 },
                 "resourceScenario": {
                     "kind": resource_scenario,
@@ -1305,6 +1404,8 @@ class AnalyticalRunContractTest(unittest.TestCase):
         domain_size,
         ep,
         placement,
+        etp=1,
+        pp=1,
         seed=17,
         message_bytes_per_rank=11397120,
     ):
@@ -1312,29 +1413,59 @@ class AnalyticalRunContractTest(unittest.TestCase):
         matrix = [[0 for _ in range(domain_count)] for _ in range(domain_count)]
         multiplier = 1
         if placement == "FLAT_RANDOM":
-            multiplier = 769 + 2 * seed
+            multiplier = (769 + 2 * seed) % active_ranks
+            if multiplier == 0:
+                multiplier = 1
             if multiplier % 2 == 0:
                 multiplier += 1
-            while math.gcd(multiplier, active_ranks) != 1:
+            minimum_stride = (domain_size + 126) // 127
+            while (
+                multiplier <= 1
+                or multiplier >= active_ranks - 1
+                or math.gcd(multiplier, active_ranks) != 1
+                or min(multiplier, active_ranks - multiplier) < minimum_stride
+            ):
                 multiplier += 2
-        for first in range(0, active_ranks, ep):
-            group_size = min(ep, active_ranks - first)
-            assert message_bytes_per_rank % group_size == 0
-            pair_bytes = message_bytes_per_rank // group_size
-            counts = [0] * domain_count
-            for logical_rank in range(first, first + group_size):
-                physical_rank = (
-                    logical_rank
-                    if placement == "TOPOLOGY_AWARE"
-                    else (logical_rank * multiplier + seed) % active_ranks
-                )
-                counts[physical_rank // domain_size] += 1
-            for source, source_count in enumerate(counts):
-                for destination, destination_count in enumerate(counts):
-                    pairs = source_count * destination_count
-                    if source == destination:
-                        pairs -= source_count
-                    matrix[source][destination] += pairs * pair_bytes
+                if multiplier >= active_ranks:
+                    multiplier %= active_ranks
+                    if multiplier == 0:
+                        multiplier = 1
+        moe_denominator = etp * ep * pp
+        edp_count = active_ranks // moe_denominator
+        for edp in range(edp_count + 1):
+            for pp_coordinate in range(pp):
+                for etp_coordinate in range(etp):
+                    logical_group = []
+                    for ep_coordinate in range(ep):
+                        logical_rank = (
+                            (
+                                (edp * pp + pp_coordinate) * ep
+                                + ep_coordinate
+                            )
+                            * etp
+                            + etp_coordinate
+                        )
+                        if logical_rank < active_ranks:
+                            logical_group.append(logical_rank)
+                    if not logical_group:
+                        continue
+                    group_size = len(logical_group)
+                    assert message_bytes_per_rank % group_size == 0
+                    pair_bytes = message_bytes_per_rank // group_size
+                    counts = [0] * domain_count
+                    for logical_rank in logical_group:
+                        physical_rank = (
+                            logical_rank
+                            if placement == "TOPOLOGY_AWARE"
+                            else (logical_rank * multiplier + seed) % active_ranks
+                        )
+                        counts[physical_rank // domain_size] += 1
+                    for source, source_count in enumerate(counts):
+                        for destination, destination_count in enumerate(counts):
+                            pairs = source_count * destination_count
+                            if source == destination:
+                                pairs -= source_count
+                            matrix[source][destination] += pairs * pair_bytes
         global_bytes = sum(sum(row) for row in matrix)
         intra_bytes = sum(matrix[index][index] for index in range(domain_count))
         return {
@@ -3493,19 +3624,71 @@ class AnalyticalRunContractTest(unittest.TestCase):
         )
         self.assertEqual(analysis["topology_identity"]["domain_size_ranks"], 1024)
         self.assertRegex(analysis["topology_identity"]["digest"], SHA256_ID)
+        topology_evidence = analysis["topology_identity"]["evidence"]
         self.assertEqual(
-            analysis["topology_identity"]["evidence"],
-            {
-                "ref": "current-product-topology-evidence",
-                "class": "VENDOR_SPEC",
-                "readiness": "FIELD_UNVERIFIED",
-            },
+            topology_evidence["ref"], "current-product-topology-evidence"
         )
+        self.assertEqual(topology_evidence["class"], "VENDOR_SPEC")
+        self.assertEqual(topology_evidence["readiness"], "FIELD_VERIFIED")
+        self.assertEqual(
+            topology_evidence["source_revision"],
+            "current_product_superpod_1024-source-v1",
+        )
+        self.assertRegex(topology_evidence["source_sha256"], SHA256_ID)
+        self.assertRegex(topology_evidence["claim_sha256"], SHA256_ID)
+        self.assertTrue(topology_evidence["hardware_available"])
         self.assertEqual(analysis["readiness"], "READY")
         self.assertEqual(result["readiness"]["topology_placement"], "READY")
         self.assertEqual(
             result["evidence"]["topology_placement"]["readiness"],
-            "FIELD_UNVERIFIED",
+            "FIELD_VERIFIED",
+        )
+
+    def test_topology_and_ragged_evidence_are_subject_bound(self):
+        generic_completed, generic_result = self.run_mutated_target_contract(
+            topology_placement=self.topology_placement_artifact(
+                subject_bound_evidence=False
+            )
+        )
+        self.assertEqual(generic_completed.returncode, 2)
+        self.assertEqual(
+            generic_result["reject_code"], "TOPOLOGY_IDENTITY_EVIDENCE_INVALID"
+        )
+
+        current_generic = self.topology_placement_artifact(
+            subject_bound_evidence=False
+        )
+        unrelated = self.topology_placement_artifact(
+            topology_identity="ARCHITECTURE_LIMIT_SUPERNODE_8192",
+            subject_bound_evidence=False,
+        )
+        unrelated["spec"]["topology"]["evidenceRef"] = current_generic["spec"][
+            "topology"
+        ]["evidenceRef"]
+        unrelated["spec"]["topology"]["evidence"] = copy.deepcopy(
+            current_generic["spec"]["topology"]["evidence"]
+        )
+        unrelated_completed, unrelated_result = self.run_mutated_target_contract(
+            topology_placement=unrelated
+        )
+        self.assertEqual(unrelated_completed.returncode, 2)
+        self.assertEqual(
+            unrelated_result["reject_code"], "TOPOLOGY_IDENTITY_EVIDENCE_INVALID"
+        )
+
+        generic_ragged = self.topology_placement_artifact(
+            resource_scenario="EXACT_100000_RAGGED",
+            ragged_capability="SUPPORTED",
+            subject_bound_topology_evidence=True,
+            subject_bound_ragged_evidence=False,
+        )
+        ragged_completed, ragged_result = self.run_mutated_target_contract(
+            topology_placement=generic_ragged
+        )
+        self.assertEqual(ragged_completed.returncode, 2)
+        self.assertEqual(
+            ragged_result["reject_code"],
+            "RAGGED_FRAMEWORK_CAPABILITY_EVIDENCE_INVALID",
         )
 
     def test_regular_topology_placement_candidates_match_independent_oracle(self):
@@ -3571,13 +3754,26 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 self.assertRegex(candidate["rank_map"]["digest"], SHA256_ID)
                 self.assertRegex(candidate["candidate_digest"], SHA256_ID)
                 self.assertEqual(
-                    [group["grid"] for group in candidate["communication_groups"]],
-                    ["ATTENTION", "MOE"],
+                    [group["axis"] for group in candidate["communication_groups"]],
+                    [
+                        "ATTENTION_TP",
+                        "ATTENTION_CP",
+                        "ATTENTION_DP",
+                        "ATTENTION_PP",
+                        "MOE_ETP",
+                        "MOE_EP",
+                        "MOE_EDP",
+                        "MOE_PP",
+                        "OPTIMIZER_DP",
+                        "OPTIMIZER_EDP",
+                    ],
                 )
                 for group in candidate["communication_groups"]:
                     self.assertEqual(
-                        group["representation"], "COMPLETE_CANONICAL_FORMULA_V1"
+                        group["representation"], "MIXED_RADIX_FORMULA_V1"
                     )
+                    self.assertEqual(group["covered_ranks"], 98_304)
+                    self.assertEqual(group["ragged_tail_ranks"], 0)
                     self.assertRegex(group["membership_digest"], SHA256_ID)
         self.assertEqual(
             [pair["ep"] for pair in analysis["placement_pairs"]],
@@ -3601,6 +3797,118 @@ class AnalyticalRunContractTest(unittest.TestCase):
             analysis["resident_state"]["candidate_domain_matrix_cells"],
             10 * 96 * 96,
         )
+
+    def test_subject_bound_evidence_tampering_is_fail_closed(self):
+        topology_mutations = [
+            lambda record: record.update({"class": "USER_INPUT"}),
+            lambda record: record["method"].update({"name": "unrelated-audit"}),
+            lambda record: record["conditions"].update(
+                {"hardwareAvailable": False}
+            ),
+            lambda record: record["subject"].update(
+                {"claimSha256": "sha256:" + "0" * 64}
+            ),
+        ]
+        for index, mutate in enumerate(topology_mutations):
+            with self.subTest(kind="topology", index=index):
+                artifact = self.topology_placement_artifact()
+                mutate(artifact["spec"]["topology"]["evidence"][0])
+                completed, result = self.run_mutated_target_contract(
+                    topology_placement=artifact
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(
+                    result["reject_code"],
+                    "TOPOLOGY_IDENTITY_EVIDENCE_INVALID",
+                )
+
+        ragged_claims = (
+            "nonUniformProcessGroups",
+            "tensorShardSemantics",
+            "expertShardSemantics",
+            "optimizerStateSemantics",
+        )
+        for claim in ragged_claims:
+            with self.subTest(kind="ragged_claim", claim=claim):
+                artifact = self.topology_placement_artifact(
+                    resource_scenario="EXACT_100000_RAGGED",
+                    ragged_capability="SUPPORTED",
+                )
+                record = artifact["spec"]["frameworkCapabilities"][
+                    "raggedParallelGroups"
+                ]["evidence"][0]
+                record["claims"][claim] = False
+                completed, result = self.run_mutated_target_contract(
+                    topology_placement=artifact
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(
+                    result["reject_code"],
+                    "RAGGED_FRAMEWORK_CAPABILITY_EVIDENCE_INVALID",
+                )
+
+        for field in ("hardware", "source", "claim_digest"):
+            with self.subTest(kind="ragged_binding", field=field):
+                artifact = self.topology_placement_artifact(
+                    resource_scenario="EXACT_100000_RAGGED",
+                    ragged_capability="SUPPORTED",
+                )
+                record = artifact["spec"]["frameworkCapabilities"][
+                    "raggedParallelGroups"
+                ]["evidence"][0]
+                if field == "hardware":
+                    record["conditions"]["hardwareAvailable"] = False
+                elif field == "source":
+                    record["subject"]["sourceRevision"] = "unrelated-revision"
+                else:
+                    record["claims"]["claimSha256"] = "sha256:" + "0" * 64
+                completed, result = self.run_mutated_target_contract(
+                    topology_placement=artifact
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(
+                    result["reject_code"],
+                    "RAGGED_FRAMEWORK_CAPABILITY_EVIDENCE_INVALID",
+                )
+
+    def test_folded_parallel_grid_memberships_are_complete(self):
+        completed, result = self.run_mutated_target_contract(
+            topology_placement=self.topology_placement_artifact()
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr[-2000:])
+        candidate = next(
+            item
+            for item in result["results"]["topology_placement_analysis"][
+                "candidates"
+            ]
+            if item["id"] == "TOPOLOGY_AWARE_EP2048"
+        )
+        self.assertEqual(candidate["attention_grid"]["full_grid_product"], 98_304)
+        self.assertEqual(candidate["attention_grid"]["remainder_ranks"], 0)
+        self.assertEqual(candidate["moe_grid"]["full_grid_product"], 98_304)
+        self.assertEqual(candidate["moe_grid"]["remainder_ranks"], 0)
+        self.assertEqual(
+            [group["axis"] for group in candidate["communication_groups"]],
+            [
+                "ATTENTION_TP",
+                "ATTENTION_CP",
+                "ATTENTION_DP",
+                "ATTENTION_PP",
+                "MOE_ETP",
+                "MOE_EP",
+                "MOE_EDP",
+                "MOE_PP",
+                "OPTIMIZER_DP",
+                "OPTIMIZER_EDP",
+            ],
+        )
+        for group in candidate["communication_groups"]:
+            with self.subTest(axis=group["axis"]):
+                self.assertEqual(group["representation"], "MIXED_RADIX_FORMULA_V1")
+                self.assertEqual(group["covered_ranks"], 98_304)
+                self.assertEqual(group["ragged_tail_ranks"], 0)
+                self.assertRegex(group["membership_digest"], SHA256_ID)
 
     def test_architecture_limit_identity_has_independent_evidence_and_digest(self):
         current_completed, current_result = self.run_mutated_target_contract(
@@ -3629,19 +3937,24 @@ class AnalyticalRunContractTest(unittest.TestCase):
             "topology_placement_analysis"
         ]
         self.assertEqual(
-            architecture["topology_identity"],
-            {
-                "kind": "ARCHITECTURE_LIMIT_SUPERNODE_8192",
-                "scope": "ARCHITECTURE_LIMIT",
-                "domain_size_ranks": 8192,
-                "digest": architecture["topology_identity"]["digest"],
-                "evidence": {
-                    "ref": "architecture-limit-topology-evidence",
-                    "class": "VENDOR_SPEC",
-                    "readiness": "FIELD_UNVERIFIED",
-                },
-            },
+            architecture["topology_identity"]["kind"],
+            "ARCHITECTURE_LIMIT_SUPERNODE_8192",
         )
+        self.assertEqual(
+            architecture["topology_identity"]["scope"], "ARCHITECTURE_LIMIT"
+        )
+        self.assertEqual(
+            architecture["topology_identity"]["domain_size_ranks"], 8192
+        )
+        architecture_evidence = architecture["topology_identity"]["evidence"]
+        self.assertEqual(
+            architecture_evidence["ref"],
+            "architecture-limit-topology-evidence",
+        )
+        self.assertEqual(architecture_evidence["class"], "VENDOR_SPEC")
+        self.assertEqual(architecture_evidence["readiness"], "FIELD_VERIFIED")
+        self.assertRegex(architecture_evidence["claim_sha256"], SHA256_ID)
+        self.assertTrue(architecture_evidence["hardware_available"])
         self.assertEqual(
             architecture["resource_scenario"]["active_domain_count"], 12
         )
@@ -3730,19 +4043,37 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 self.assertEqual(resource["active_domain_count"], 98)
                 self.assertEqual(resource["full_domain_count"], 97)
                 self.assertEqual(resource["partial_domain_active_ranks"], 672)
+                capability = analysis["framework_capability"][
+                    "ragged_parallel_groups"
+                ]
+                self.assertEqual(capability["state"], "SUPPORTED")
+                capability_evidence = capability["evidence"]
                 self.assertEqual(
-                    analysis["framework_capability"],
+                    capability_evidence["ref"],
+                    "target-framework-ragged-evidence",
+                )
+                self.assertEqual(
+                    capability_evidence["class"], "SOURCE_CODE_AUDIT"
+                )
+                self.assertEqual(
+                    capability_evidence["readiness"], "FIELD_VERIFIED"
+                )
+                self.assertEqual(
+                    capability_evidence["framework"],
+                    "TARGET_ASCEND_TRAINING_FRAMEWORK",
+                )
+                self.assertRegex(capability_evidence["source_sha256"], SHA256_ID)
+                self.assertRegex(capability_evidence["claim_sha256"], SHA256_ID)
+                self.assertEqual(
+                    capability_evidence["claims"],
                     {
-                        "ragged_parallel_groups": {
-                            "state": "SUPPORTED",
-                            "evidence": {
-                                "ref": "target-framework-ragged-evidence",
-                                "class": "USER_INPUT",
-                                "readiness": "FIELD_VERIFIED",
-                            },
-                        }
+                        "non_uniform_process_groups": True,
+                        "tensor_shard_semantics": True,
+                        "expert_shard_semantics": True,
+                        "optimizer_state_semantics": True,
                     },
                 )
+                self.assertTrue(capability_evidence["hardware_available"])
                 for candidate in analysis["candidates"]:
                     ep = candidate["moe_grid"]["ep"]
                     self.assertTrue(candidate["moe_grid"]["ragged"])
@@ -3758,6 +4089,54 @@ class AnalyticalRunContractTest(unittest.TestCase):
                     for candidate in analysis["candidates"]
                     if candidate["id"] == "TOPOLOGY_AWARE_EP2048"
                 )
+                self.assertEqual(
+                    (
+                        ep2048["attention_grid"]["full_grid_product"],
+                        ep2048["attention_grid"]["remainder_ranks"],
+                    ),
+                    (100_000, 0),
+                )
+                self.assertEqual(
+                    (
+                        ep2048["moe_grid"]["full_grid_product"],
+                        ep2048["moe_grid"]["remainder_ranks"],
+                    ),
+                    (98_304, 1_696),
+                )
+                for group in ep2048["communication_groups"]:
+                    expected_tail = (
+                        0
+                        if group["axis"].startswith("ATTENTION_")
+                        or group["axis"] == "OPTIMIZER_DP"
+                        else 1_696
+                    )
+                    self.assertEqual(group["covered_ranks"], 100_000)
+                    self.assertEqual(group["ragged_tail_ranks"], expected_tail)
+                    canonical = (
+                        "simai.folded-communication-group/v1|"
+                        f"{group['axis']}|"
+                        f"{analysis['provenance']['target_workload_sha256']}|"
+                        f"{analysis['topology_identity']['kind']}|{scenario}|"
+                        f"{ep2048['placement']}|{ep2048['rank_map']['digest']}|"
+                        "N=100000|"
+                        f"TP={ep2048['attention_grid']['tp']}|"
+                        f"CP={ep2048['attention_grid']['cp']}|"
+                        f"DP={ep2048['attention_grid']['dp']}|"
+                        f"APP={ep2048['attention_grid']['pp']}|"
+                        f"ETP={ep2048['moe_grid']['etp']}|"
+                        f"EP={ep2048['moe_grid']['ep']}|"
+                        f"EDP={ep2048['moe_grid']['edp']}|"
+                        f"MPP={ep2048['moe_grid']['pp']}|"
+                        f"axisSize={group['axis_size']}|"
+                        f"fullGridProduct={group['full_grid_product']}|"
+                        f"remainder={group['ragged_tail_ranks']}|"
+                        f"{group['membership_formula']}"
+                    )
+                    self.assertEqual(
+                        group["membership_digest"],
+                        "sha256:"
+                        + hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+                    )
                 oracle = self.enumerate_placement_oracle(
                     active_ranks=100_000,
                     domain_size=1024,
@@ -3773,15 +4152,80 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 )
                 self.assertEqual(result["readiness"]["topology_placement"], "READY")
 
+    def test_nontrivial_etp_pp_folded_traffic_matches_independent_oracle(self):
+        artifact = self.topology_placement_artifact()
+        artifact["spec"]["parallelSpace"]["attention"].update(
+            {"tp": 2, "pp": 2}
+        )
+        artifact["spec"]["parallelSpace"]["moe"].update(
+            {"etp": 2, "pp": 2}
+        )
+        completed, result = self.run_mutated_target_contract(
+            topology_placement=artifact
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr[-2000:])
+        analysis = result["results"]["topology_placement_analysis"]
+        candidate = next(
+            item
+            for item in analysis["candidates"]
+            if item["id"] == "TOPOLOGY_AWARE_EP2048"
+        )
+        self.assertEqual(
+            candidate["attention_grid"],
+            {
+                "tp": 2,
+                "cp": 1,
+                "dp": 24_576,
+                "pp": 2,
+                "product": 98_304,
+                "full_grid_product": 98_304,
+                "remainder_ranks": 0,
+            },
+        )
+        self.assertEqual(candidate["moe_grid"]["etp"], 2)
+        self.assertEqual(candidate["moe_grid"]["edp"], 12)
+        self.assertEqual(candidate["moe_grid"]["pp"], 2)
+        self.assertEqual(candidate["moe_grid"]["full_grid_product"], 98_304)
+        self.assertEqual(candidate["moe_grid"]["remainder_ranks"], 0)
+        oracle = self.enumerate_placement_oracle(
+            active_ranks=98_304,
+            domain_size=1024,
+            ep=2048,
+            etp=2,
+            pp=2,
+            placement="TOPOLOGY_AWARE",
+        )
+        self.assertEqual(candidate["domain_matrix_B"], oracle["domain_matrix_B"])
+        self.assertEqual(candidate["global_bytes"], oracle["global_bytes"])
+        self.assertEqual(
+            candidate["cross_domain_bytes"], oracle["cross_domain_bytes"]
+        )
+        self.assertAlmostEqual(
+            candidate["local_expert_hit"], oracle["local_expert_hit"]
+        )
+
     def test_topology_placement_fail_closed_reject_codes_are_stable(self):
         cases = []
         identity = self.topology_placement_artifact()
         identity["spec"]["topology"]["domainSizeRanks"] = 8192
-        cases.append((identity, "TOPOLOGY_IDENTITY_SEMANTICS_INVALID", 2))
+        cases.append((identity, "TOPOLOGY_IDENTITY_EVIDENCE_INVALID", 2))
 
         attention = self.topology_placement_artifact()
-        attention["spec"]["parallelSpace"]["attention"]["tp"] = 5
-        cases.append((attention, "ATTENTION_GRID_NOT_DIVISIBLE", 2))
+        attention["spec"]["parallelSpace"]["attention"]["tp"] = 3
+        cases.append((attention, "ATTENTION_TP_SHARD_INVALID", 2))
+
+        regular_denominator = self.topology_placement_artifact()
+        regular_denominator["spec"]["parallelSpace"]["attention"]["tp"] = 2
+        regular_denominator["spec"]["parallelSpace"]["attention"]["pp"] = 5
+        regular_denominator["spec"]["parallelSpace"]["moe"]["pp"] = 5
+        cases.append(
+            (
+                regular_denominator,
+                "REGULAR_ATTENTION_GRID_NOT_DIVISIBLE",
+                2,
+            )
+        )
 
         ep_divisor = self.topology_placement_artifact()
         ep_divisor["spec"]["parallelSpace"]["moe"]["regularEpValues"][-1] = 2047
@@ -3795,8 +4239,8 @@ class AnalyticalRunContractTest(unittest.TestCase):
             resource_scenario="EXACT_100000_RAGGED",
             ragged_capability="SUPPORTED",
         )
-        moe_grid["spec"]["parallelSpace"]["moe"]["etp"] = 2_147_483_647
-        cases.append((moe_grid, "MOE_GRID_INVALID", 2))
+        moe_grid["spec"]["parallelSpace"]["moe"]["etp"] = 3
+        cases.append((moe_grid, "MOE_ETP_SHARD_INVALID", 2))
 
         message = self.topology_placement_artifact()
         message["spec"]["traffic"]["messageBytesPerRank"] = 1
@@ -3858,6 +4302,37 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 changed_candidates[f"TOPOLOGY_AWARE_EP{ep}"]["rank_map"]["digest"],
             )
 
+    def test_flat_random_seed_cannot_degenerate_to_identity_or_translation(self):
+        artifact = self.topology_placement_artifact()
+        artifact["spec"]["placementPolicies"]["flatRandomSeed"] = 48_768
+        completed, result = self.run_mutated_target_contract(
+            topology_placement=artifact
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr[-2000:])
+        candidates = {
+            candidate["id"]: candidate
+            for candidate in result["results"]["topology_placement_analysis"][
+                "candidates"
+            ]
+        }
+        for ep in (128, 256, 512, 1024, 2048):
+            with self.subTest(ep=ep):
+                flat = candidates[f"FLAT_RANDOM_EP{ep}"]
+                aware = candidates[f"TOPOLOGY_AWARE_EP{ep}"]
+                self.assertEqual(
+                    flat["rank_map"]["algorithm"],
+                    "AFFINE_DOMAIN_MIXING_PRP_V2",
+                )
+                self.assertNotIn(
+                    flat["rank_map"]["multiplier"],
+                    (1, 98_303),
+                )
+                self.assertEqual(flat["rank_map"]["offset"], 48_768)
+                self.assertNotEqual(
+                    flat["domain_matrix_B"], aware["domain_matrix_B"]
+                )
+
     def test_topology_placement_artifact_is_bounded_exact_and_content_addressed(self):
         unknown_key = self.topology_placement_artifact()
         unknown_key["spec"]["topology"]["assumedBandwidth"] = "UNKNOWN"
@@ -3912,6 +4387,60 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 )
                 self.assertEqual(completed.returncode, 2)
                 self.assertEqual(result["reject_code"], expected_code)
+
+    def test_requested_topology_capability_never_falls_back_to_not_required(self):
+        completed, result = self.run_mutated_target_contract(
+            topology_placement=self.topology_placement_artifact(),
+            mutate_manifest=lambda manifest: manifest["topology_placement"].update(
+                {"schema_version": "simai.topology-placement.request/unsupported"}
+            ),
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["reject_code"], "TOPOLOGY_PLACEMENT_ENVELOPE_INVALID")
+        self.assertEqual(result["readiness"]["topology_placement"], "UNKNOWN")
+        self.assertEqual(
+            result["results"]["topology_placement_analysis"],
+            {
+                "schema_version": "simai.topology-placement-analysis/v1alpha1",
+                "mode": "TRAFFIC_ONLY",
+                "capability": {
+                    "backend": "ANALYTICAL",
+                    "projector": "PROJECTED_A2A_TYPED",
+                    "endpoint_flows_materialized": False,
+                    "simulation_flow_support": "NOT_PROVIDED",
+                },
+                "readiness": "UNKNOWN",
+                "state": "UNSUPPORTED",
+                "reject_code": "TOPOLOGY_PLACEMENT_ENVELOPE_INVALID",
+            },
+        )
+
+    def test_topology_artifact_reference_rejects_unknown_keys_before_io(self):
+        completed, result = self.run_mutated_target_contract(
+            topology_placement=self.topology_placement_artifact(),
+            mutate_manifest=lambda manifest: manifest["topology_placement"][
+                "artifact"
+            ].update({"unexpected": "must-fail-before-open"}),
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(
+            result["reject_code"], "TOPOLOGY_PLACEMENT_REFERENCE_INVALID"
+        )
+        self.assertEqual(result["readiness"]["topology_placement"], "UNKNOWN")
+
+    def test_topology_artifact_open_is_single_fd_regular_and_nofollow(self):
+        completed, result = self.run_mutated_target_contract(
+            topology_placement=self.topology_placement_artifact(),
+            topology_via_symlink=True,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(
+            result["reject_code"], "TOPOLOGY_PLACEMENT_ARTIFACT_NOT_REGULAR"
+        )
+        self.assertEqual(result["readiness"]["topology_placement"], "UNKNOWN")
 
     def test_topology_placement_target_and_evidence_bindings_fail_closed(self):
         completed, result = self.run_mutated_target_contract(

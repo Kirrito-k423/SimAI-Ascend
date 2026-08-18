@@ -138,6 +138,7 @@ struct AnalyticalRunContract {
   uint64_t target_active_main_blocks_parameters = 0;
   uint64_t target_active_main_forward_parameters = 0;
   uint64_t target_active_training_graph_parameters = 0;
+  int target_hidden_size = 0;
   int target_routed_experts = 0;
   int target_top_k = 0;
   int target_expert_intermediate_size = 0;
