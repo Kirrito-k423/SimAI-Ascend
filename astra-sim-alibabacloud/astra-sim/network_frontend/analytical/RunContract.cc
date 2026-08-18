@@ -1035,8 +1035,11 @@ bool BuildProfileEvidenceIndex(
     if (!record_valid || id.empty() || evidence_records->count(id) != 0U) {
       return false;
     }
-    (*evidence_records)[id] = {
-        evidence_class, readiness, hardware_available};
+    ProfileEvidenceRecord parsed_record;
+    parsed_record.evidence_class = evidence_class;
+    parsed_record.readiness = readiness;
+    parsed_record.hardware_available = hardware_available;
+    (*evidence_records)[id] = parsed_record;
   }
   return true;
 }
