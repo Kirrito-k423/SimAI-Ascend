@@ -138,7 +138,10 @@ Sys::Sys(
     GPUType _gpu_type,
     std::vector<int>_all_gpus,
     std::vector<int>_NVSwitchs,
-    int _ngpus_per_node) {
+    int _ngpus_per_node,
+    CollectiveCostModel* _collective_cost_model,
+    std::string _collective_topology_domain,
+    std::string _collective_topology_digest) {
   scheduler_unit = nullptr;
   vLevels = nullptr;
   memBus = nullptr;
@@ -179,6 +182,9 @@ Sys::Sys(
   this->all_gpus = _all_gpus;
   this->gpu_type = _gpu_type;
   this->ngpus_per_node = _ngpus_per_node;
+  this->collective_cost_model = _collective_cost_model;
+  this->collective_topology_domain = _collective_topology_domain;
+  this->collective_topology_digest = _collective_topology_digest;
   if ((id + npu_offset + 1) > all_generators.size()) {
     all_generators.resize(id + npu_offset + 1);
   }

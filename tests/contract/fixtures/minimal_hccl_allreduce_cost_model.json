@@ -1,0 +1,58 @@
+{
+  "apiVersion": "simai.ascend.costmodel/v1alpha1",
+  "kind": "HcclCostModel",
+  "schemaSemver": "0.1.0",
+  "metadata": {
+    "id": "synthetic-hccl-ar-alpha-beta-r4-host"
+  },
+  "spec": {
+    "profileDigest": "sha256:3749a4018f73ee88785ec87217412238c51c789ef42bcbbae09a076cb575bb9b",
+    "collective": "ALL_REDUCE",
+    "dtype": "BF16",
+    "reduction": "SUM",
+    "timingScope": "DEVICE_ONLY",
+    "groupDomain": {
+      "rankCounts": [4],
+      "groupTypes": ["TP"],
+      "scopes": ["HOST"],
+      "topologyDigests": [
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      ]
+    },
+    "messageDomainBytes": {
+      "min": 1048576,
+      "max": 1048576,
+      "unit": "B"
+    },
+    "inputSamples": [
+      {
+        "id": "synthetic-hccl-ar-1mib-r4-host",
+        "path": "tests/contract/fixtures/minimal_hccl_allreduce_observation.json",
+        "sha256": "sha256:f68c45dd1c7060c1da8591c26c9c5123576e567f9d611fbeb00626df56be65fe"
+      }
+    ],
+    "fit": {
+      "family": "ALPHA_BETA",
+      "formula": "round(startup_ns + message_B / bandwidth_Bps * 1000000000)",
+      "startup": {
+        "value": 20000,
+        "unit": "ns"
+      },
+      "bandwidth": {
+        "value": 25000000000,
+        "unit": "B/s"
+      },
+      "interpolation": "NONE"
+    },
+    "traffic": {
+      "algorithm": "RING",
+      "semantics": "ALGORITHM_TOTAL_GROUP_BYTES"
+    },
+    "evidenceClass": "DERIVED",
+    "readiness": "FIELD_UNVERIFIED",
+    "extrapolation": {
+      "allowed": false,
+      "policy": "FAIL"
+    }
+  }
+}

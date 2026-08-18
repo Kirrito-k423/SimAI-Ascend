@@ -951,6 +951,44 @@ Tick Layer::compute_time(
     return 0;
   }
 
+  if (generator->collective_cost_model != nullptr) {
+    CollectiveCostRequest request;
+    switch (comtype) {
+      case ComType::All_Reduce:
+        request.collective = CostedCollective::AllReduce;
+        break;
+      default:
+        request.collective = CostedCollective::Unsupported;
+        break;
+    }
+    switch (group_type) {
+      case MockNccl::GroupType::TP:
+        request.group_type = CostedGroupType::TP;
+        break;
+      case MockNccl::GroupType::DP:
+        request.group_type = CostedGroupType::DP;
+        break;
+      case MockNccl::GroupType::EP:
+        request.group_type = CostedGroupType::EP;
+        break;
+      case MockNccl::GroupType::DP_EP:
+        request.group_type = CostedGroupType::DP_EP;
+        break;
+      default:
+        request.group_type = CostedGroupType::Unsupported;
+        break;
+    }
+    request.message_bytes_per_rank = data_size;
+    request.rank_count = nranks;
+    request.tp_size = tp_size;
+    request.ep_size = ep_size;
+    request.topology_domain = generator->collective_topology_domain;
+    request.topology_digest = generator->collective_topology_digest;
+    const CollectiveCostEstimate estimate =
+        generator->collective_cost_model->Estimate(request);
+    return estimate.supported ? estimate.duration_ns : 0;
+  }
+
 
     int n_ranks;
     int nnics;

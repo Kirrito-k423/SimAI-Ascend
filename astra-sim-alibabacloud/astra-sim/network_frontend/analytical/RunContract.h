@@ -8,6 +8,7 @@
 
 #include <string>
 
+#include "HcclCostModel.h"
 #include "astra-sim/system/Common.hh"
 
 namespace SimAIContract {
@@ -42,7 +43,20 @@ struct AnalyticalRunContract {
   std::string workload_sha256 = "UNKNOWN";
   std::string binary_sha256 = "UNKNOWN";
   std::string device_profile_sha256 = "UNKNOWN";
+  std::string cost_model_sha256 = "UNKNOWN";
+  std::string raw_observation_sha256 = "UNKNOWN";
   bool device_profile_present = false;
+  bool ascend_profiled = false;
+  int ascend_rank_count = 0;
+  std::string topology_domain;
+  std::string topology_digest;
+  std::string profile_evidence_level = "UNKNOWN";
+  std::string profile_field_readiness = "UNKNOWN";
+  std::string raw_observation_evidence_level = "UNKNOWN";
+  std::string raw_observation_field_readiness = "UNKNOWN";
+  std::string cost_model_evidence_level = "UNKNOWN";
+  std::string cost_model_field_readiness = "UNKNOWN";
+  HcclCostModelConfig hccl_cost_model;
   bool workload_digest_verified = false;
   LegacyGpuRunConfig legacy_gpu;
 };
@@ -53,7 +67,8 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]);
 // Result Manifests never include input paths or raw process logs.
 bool WriteAnalyticalResultManifest(
     const AnalyticalRunContract& contract,
-    bool execution_succeeded);
+    bool execution_succeeded,
+    const AstraSim::CollectiveCostModel* cost_model = nullptr);
 
 }  // namespace SimAIContract
 

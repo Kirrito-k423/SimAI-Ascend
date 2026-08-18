@@ -22,6 +22,7 @@ LICENSE file in the root directory of this source tree.
 #include "AstraNetworkAPI.hh"
 #include "Callable.hh"
 #include "CollectivePhase.hh"
+#include "CollectiveCostModel.hh"
 #include "Common.hh"
 #include "SendPacketEventHandlerData.hh"
 #include "UsageTracker.hh"
@@ -94,6 +95,9 @@ class Sys : public Callable {
   std::vector<int>NVSwitchs; 
   int ngpus_per_node;
   GPUType gpu_type;
+  CollectiveCostModel* collective_cost_model;
+  std::string collective_topology_domain;
+  std::string collective_topology_digest;
 
   std::vector<CollectiveImplementation*>
       all_reduce_implementation_per_dimension;
@@ -246,7 +250,10 @@ class Sys : public Callable {
       GPUType _gpu_type,
       std::vector<int> _all_gpus,
       std::vector<int> _NVSwitchs,
-      int _ngpus_per_node);
+      int _ngpus_per_node,
+      CollectiveCostModel* _collective_cost_model = nullptr,
+      std::string _collective_topology_domain = "",
+      std::string _collective_topology_digest = "");
 
   void iterate();
   bool initialize_sys(std::string name);

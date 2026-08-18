@@ -1,0 +1,65 @@
+{
+  "apiVersion": "simai.ascend.observation/v1alpha1",
+  "kind": "HcclRawSample",
+  "schemaSemver": "0.1.0",
+  "metadata": {
+    "id": "synthetic-hccl-ar-1mib-r4-host"
+  },
+  "spec": {
+    "profileRef": "synthetic-a2-four-rank-host",
+    "profileDigest": "sha256:3749a4018f73ee88785ec87217412238c51c789ef42bcbbae09a076cb575bb9b",
+    "collective": "ALL_REDUCE",
+    "group": {
+      "rankCount": 4,
+      "scope": "HOST",
+      "groupType": "TP",
+      "topologyDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "payload": {
+      "bytesPerRank": {
+        "semantics": "API_INPUT_BYTES",
+        "uniformValue": 1048576,
+        "unit": "B"
+      },
+      "dtype": "BF16",
+      "reduction": "SUM"
+    },
+    "normalized": {
+      "averageTime": {
+        "value": 61943,
+        "unit": "ns"
+      },
+      "algBandwidth": {
+        "value": 16928014594,
+        "unit": "B/s"
+      }
+    },
+    "correctness": {
+      "status": "PASS"
+    },
+    "eligibility": {
+      "fit": true,
+      "reasons": []
+    },
+    "evidence": [
+      {
+        "id": "worked-example-input",
+        "class": "USER_INPUT",
+        "readiness": "FIELD_UNVERIFIED",
+        "source": {
+          "uri": "fixture://issue-17/hccl-allreduce",
+          "ref": "worked-example-v1"
+        },
+        "method": {
+          "name": "alpha-beta-worked-example",
+          "version": "1"
+        },
+        "asOf": "2026-08-18T00:00:00+08:00",
+        "conditions": {
+          "hardwareAvailable": false
+        },
+        "sanitization": "synthetic-no-host-data"
+      }
+    ]
+  }
+}

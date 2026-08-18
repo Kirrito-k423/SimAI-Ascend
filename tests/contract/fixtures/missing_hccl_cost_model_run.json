@@ -1,0 +1,13 @@
+{
+  "schema_version": "simai.run/v1",
+  "run_id": "hccl-cost-model-missing",
+  "backend": "analytical",
+  "workload": {
+    "path": "tests/contract/fixtures/ascend_allreduce_workload.txt",
+    "sha256": "sha256:078380651e1df08da1c4d95c74bd97551a573eaec1c6339704cb75b647b52bb5"
+  },
+  "device_profile": {
+    "path": "tests/contract/fixtures/minimal_ascend_profile.json",
+    "sha256": "sha256:3749a4018f73ee88785ec87217412238c51c789ef42bcbbae09a076cb575bb9b"
+  }
+}

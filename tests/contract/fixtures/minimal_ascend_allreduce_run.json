@@ -1,0 +1,17 @@
+{
+  "schema_version": "simai.run/v1",
+  "run_id": "ascend-allreduce-minimal",
+  "backend": "analytical",
+  "workload": {
+    "path": "tests/contract/fixtures/ascend_allreduce_workload.txt",
+    "sha256": "sha256:078380651e1df08da1c4d95c74bd97551a573eaec1c6339704cb75b647b52bb5"
+  },
+  "device_profile": {
+    "path": "tests/contract/fixtures/minimal_ascend_profile.json",
+    "sha256": "sha256:3749a4018f73ee88785ec87217412238c51c789ef42bcbbae09a076cb575bb9b"
+  },
+  "collective_cost_model": {
+    "path": "tests/contract/fixtures/minimal_hccl_allreduce_cost_model.json",
+    "sha256": "sha256:4dcc3b58342544ae5107683cf97f6d6427c4e68f50f5f5398a970154b600db73"
+  }
+}

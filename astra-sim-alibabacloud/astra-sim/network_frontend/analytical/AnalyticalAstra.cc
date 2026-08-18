@@ -16,6 +16,7 @@
 #include<unistd.h>
 #include<string>
 #include<iostream>
+#include<memory>
 #include<vector>
 
 #include "astra-sim/system/Sys.hh"
@@ -77,29 +78,44 @@ int main(int argc,char *argv[]) {
     }
     return run_contract.exit_code;
   }
+  std::unique_ptr<SimAIContract::HcclCostModel> hccl_cost_model;
   if (run_contract.enabled) {
-    param->gpus.push_back(run_contract.legacy_gpu.gpu_count);
+    const int accelerator_count = run_contract.ascend_profiled
+        ? run_contract.ascend_rank_count
+        : run_contract.legacy_gpu.gpu_count;
+    const int accelerators_per_server = run_contract.ascend_profiled
+        ? run_contract.ascend_rank_count
+        : run_contract.legacy_gpu.gpus_per_server;
+    param->gpus.push_back(accelerator_count);
     param->workload = run_contract.workload_path;
     param->res = "contract-" +
         run_contract.run_manifest_sha256.substr(
             run_contract.run_manifest_sha256.size() - 12) + "-";
     param->net_work_param.gpus_per_server =
-        run_contract.legacy_gpu.gpus_per_server;
-    param->net_work_param.nics_per_server =
-        run_contract.legacy_gpu.nics_per_server;
-    param->net_work_param.nvlink_bw =
-        run_contract.legacy_gpu.nvlink_bandwidth_GBps;
-    param->net_work_param.bw_per_nic =
-        run_contract.legacy_gpu.nic_bandwidth_GBps;
-    param->net_work_param.gpu_type = run_contract.legacy_gpu.gpu_type;
+        accelerators_per_server;
+    param->net_work_param.nics_per_server = run_contract.ascend_profiled
+        ? 1
+        : run_contract.legacy_gpu.nics_per_server;
+    param->net_work_param.nvlink_bw = run_contract.ascend_profiled
+        ? 0.0
+        : run_contract.legacy_gpu.nvlink_bandwidth_GBps;
+    param->net_work_param.bw_per_nic = run_contract.ascend_profiled
+        ? 0.0
+        : run_contract.legacy_gpu.nic_bandwidth_GBps;
+    param->net_work_param.gpu_type = run_contract.ascend_profiled
+        ? GPUType::NONE
+        : run_contract.legacy_gpu.gpu_type;
     param->net_work_param.nvswitch_num =
-        run_contract.legacy_gpu.gpu_count /
-        run_contract.legacy_gpu.gpus_per_server;
+        accelerator_count / accelerators_per_server;
     param->net_work_param.switch_num =
-        120 + run_contract.legacy_gpu.gpus_per_server;
+        120 + accelerators_per_server;
     param->net_work_param.node_num =
-        param->net_work_param.nvswitch_num +
-        param->net_work_param.switch_num + run_contract.legacy_gpu.gpu_count;
+        param->net_work_param.nvswitch_num + param->net_work_param.switch_num +
+        accelerator_count;
+    if (run_contract.ascend_profiled) {
+      hccl_cost_model.reset(
+          new SimAIContract::HcclCostModel(run_contract.hccl_cost_model));
+    }
   } else if (param->parse(argc,argv)) {
     std::cerr << "-h,     --help              Help message" << std::endl;
     return -1;
@@ -158,7 +174,10 @@ int main(int argc,char *argv[]) {
     param->net_work_param.gpu_type,
     param->gpus,
     param->net_work_param.NVswitchs,
-    param->net_work_param.gpus_per_server
+    param->net_work_param.gpus_per_server,
+    hccl_cost_model.get(),
+    run_contract.topology_domain,
+    run_contract.topology_digest
   );
   systems->nvswitch_id = node2nvswitch[0];
   systems->num_gpus = using_num_gpus - param->net_work_param.nvswitch_num;
@@ -172,9 +191,14 @@ int main(int argc,char *argv[]) {
 
   std::cout << "SimAI-Analytical finished." << std::endl;
   if (run_contract.enabled &&
-      !SimAIContract::WriteAnalyticalResultManifest(run_contract, true)) {
+      !SimAIContract::WriteAnalyticalResultManifest(
+          run_contract, true, hccl_cost_model.get())) {
     std::cerr << "Unable to write Result Manifest." << std::endl;
     return 4;
+  }
+  if (hccl_cost_model != nullptr &&
+      hccl_cost_model->Summary().unsupported_request) {
+    return 3;
   }
   return 0;
 };

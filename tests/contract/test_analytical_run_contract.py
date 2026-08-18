@@ -31,10 +31,23 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 "SIMAI_ANALYTICAL_BIN"
             )
 
+    @staticmethod
+    def prepare_run_directory(temp_dir):
+        run_directory = Path(temp_dir)
+        (run_directory / "results").mkdir()
+        (run_directory / "tests").symlink_to(
+            REPO_ROOT / "tests", target_is_directory=True
+        )
+        (run_directory / "astra-sim-alibabacloud").symlink_to(
+            REPO_ROOT / "astra-sim-alibabacloud", target_is_directory=True
+        )
+        return run_directory
+
     def run_contract(self, manifest_name):
         manifest_path = FIXTURES / manifest_name
         with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:
-            result_path = Path(temp_dir) / "result.json"
+            run_directory = self.prepare_run_directory(temp_dir)
+            result_path = run_directory / "result.json"
             completed = subprocess.run(
                 [
                     str(self.binary),
@@ -43,7 +56,7 @@ class AnalyticalRunContractTest(unittest.TestCase):
                     "--result-manifest",
                     str(result_path),
                 ],
-                cwd=REPO_ROOT,
+                cwd=run_directory,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -110,34 +123,148 @@ class AnalyticalRunContractTest(unittest.TestCase):
         self.assertNotIn("tests/contract/fixtures/minimal_workload.txt", serialized)
         self.assertIsNone(re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", serialized))
 
-    def test_minimal_gpu_workload_keeps_legacy_cli_compatible(self):
-        completed = subprocess.run(
-            [
-                str(self.binary),
-                "-w",
-                str(FIXTURES / "minimal_workload.txt"),
-                "-g",
-                "1",
-                "-g_p_s",
-                "1",
-                "-nv",
-                "360",
-                "-nic",
-                "48.5",
-                "-n_p_s",
-                "1",
-                "-g_type",
-                "H100",
-                "-r",
-                "issue16-legacy-cli-",
-            ],
-            cwd=REPO_ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=30,
-            check=False,
+    def test_minimal_ascend_allreduce_uses_profiled_hccl_cost(self):
+        completed, result, _ = self.run_contract(
+            "minimal_ascend_allreduce_run.json"
         )
+
+        self.assertEqual(
+            completed.returncode,
+            0,
+            msg=f"stdout:\n{completed.stdout[-2000:]}\nstderr:\n{completed.stderr[-2000:]}",
+        )
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(result["reject_code"], "NONE")
+        self.assertEqual(result["input_summary"]["accelerator"], "ASCEND_PROFILED")
+
+        # Independent worked example: 20,000 ns startup plus 1 MiB at
+        # 25,000,000,000 B/s rounds to 61,943 ns. A four-rank ring moves
+        # 2 * (4 - 1) * 1 MiB = 6,291,456 B across the whole group.
+        self.assertEqual(result["results"]["timing_ns"], 61943)
+        self.assertEqual(result["results"]["traffic_B"], 6291456)
+        self.assertEqual(
+            result["results"]["collective"],
+            {
+                "operation": "ALL_REDUCE",
+                "message_bytes_per_rank": 1048576,
+                "rank_count": 4,
+                "group_type": "TP",
+                "topology_domain": "HOST",
+            },
+        )
+
+        provenance = result["provenance"]
+        self.assertEqual(provenance["cost_model"], "HCCL_DERIVED")
+        self.assertEqual(
+            provenance["device_profile_sha256"],
+            "sha256:"
+            + hashlib.sha256(
+                (FIXTURES / "minimal_ascend_profile.json").read_bytes()
+            ).hexdigest(),
+        )
+        self.assertEqual(
+            provenance["cost_model_sha256"],
+            "sha256:"
+            + hashlib.sha256(
+                (FIXTURES / "minimal_hccl_allreduce_cost_model.json").read_bytes()
+            ).hexdigest(),
+        )
+        self.assertEqual(
+            provenance["raw_observation_sha256"],
+            "sha256:"
+            + hashlib.sha256(
+                (FIXTURES / "minimal_hccl_allreduce_observation.json").read_bytes()
+            ).hexdigest(),
+        )
+
+        evidence = result["evidence"]
+        self.assertEqual(evidence["device_profile"]["level"], "USER_INPUT")
+        self.assertEqual(evidence["device_profile"]["readiness"], "FIELD_UNVERIFIED")
+        self.assertEqual(evidence["raw_observation"]["level"], "USER_INPUT")
+        self.assertEqual(evidence["raw_observation"]["readiness"], "FIELD_UNVERIFIED")
+        self.assertEqual(evidence["cost_model"]["level"], "DERIVED")
+        self.assertEqual(evidence["cost_model"]["readiness"], "FIELD_UNVERIFIED")
+        self.assertNotIn("MEASURED", json.dumps(evidence, sort_keys=True))
+
+        self.assertEqual(result["readiness"]["contract"], "READY")
+        self.assertEqual(result["readiness"]["ascend_profile"], "READY")
+        self.assertEqual(result["readiness"]["hccl_cost_model"], "READY")
+        self.assertEqual(result["readiness"]["traffic"], "READY")
+
+    def test_hccl_model_without_ascend_profile_fails_closed(self):
+        completed, result, _ = self.run_contract(
+            "missing_ascend_profile_run.json"
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(result["reject_code"], "ASCEND_PROFILE_REQUIRED")
+        self.assertEqual(result["input_summary"]["accelerator"], "UNKNOWN")
+        self.assertEqual(result["provenance"]["cost_model"], "UNKNOWN")
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+        self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
+        self.assertEqual(result["readiness"]["contract"], "BLOCKED")
+        self.assertEqual(result["readiness"]["ascend_profile"], "UNKNOWN")
+
+    def test_ascend_profile_without_hccl_model_is_unsupported(self):
+        completed, result, _ = self.run_contract(
+            "missing_hccl_cost_model_run.json"
+        )
+
+        self.assertEqual(completed.returncode, 3)
+        self.assertEqual(result["status"], "UNSUPPORTED")
+        self.assertEqual(result["reject_code"], "HCCL_COST_MODEL_REQUIRED")
+        self.assertEqual(result["provenance"]["cost_model"], "UNKNOWN")
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+        self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
+        self.assertEqual(result["readiness"]["contract"], "BLOCKED")
+        self.assertEqual(result["readiness"]["ascend_profile"], "BLOCKED")
+        self.assertEqual(result["readiness"]["hccl_cost_model"], "BLOCKED")
+
+    def test_ascend_collective_outside_model_domain_never_falls_back(self):
+        completed, result, _ = self.run_contract(
+            "out_of_domain_ascend_allreduce_run.json"
+        )
+
+        self.assertEqual(completed.returncode, 3)
+        self.assertEqual(result["status"], "UNSUPPORTED")
+        self.assertEqual(result["reject_code"], "HCCL_MODEL_DOMAIN_MISS")
+        self.assertEqual(result["provenance"]["cost_model"], "UNKNOWN")
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+        self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
+        self.assertEqual(result["readiness"]["contract"], "BLOCKED")
+        self.assertEqual(result["readiness"]["hccl_cost_model"], "BLOCKED")
+
+    def test_minimal_gpu_workload_keeps_legacy_cli_compatible(self):
+        with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:
+            run_directory = self.prepare_run_directory(temp_dir)
+            completed = subprocess.run(
+                [
+                    str(self.binary),
+                    "-w",
+                    str(FIXTURES / "minimal_workload.txt"),
+                    "-g",
+                    "1",
+                    "-g_p_s",
+                    "1",
+                    "-nv",
+                    "360",
+                    "-nic",
+                    "48.5",
+                    "-n_p_s",
+                    "1",
+                    "-g_type",
+                    "H100",
+                    "-r",
+                    "issue16-legacy-cli-",
+                ],
+                cwd=run_directory,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
 
         self.assertEqual(
             completed.returncode,
@@ -185,7 +312,8 @@ class AnalyticalRunContractTest(unittest.TestCase):
 
     def test_rejected_run_returns_output_error_when_result_target_is_unwritable(self):
         with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:
-            result_target = Path(temp_dir) / "result-is-a-directory"
+            run_directory = self.prepare_run_directory(temp_dir)
+            result_target = run_directory / "result-is-a-directory"
             result_target.mkdir()
             completed = subprocess.run(
                 [
@@ -195,7 +323,7 @@ class AnalyticalRunContractTest(unittest.TestCase):
                     "--result-manifest",
                     str(result_target),
                 ],
-                cwd=REPO_ROOT,
+                cwd=run_directory,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -211,7 +339,8 @@ class AnalyticalRunContractTest(unittest.TestCase):
             [str(self.binary.parent), environment.get("PATH", "")]
         )
         with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:
-            result_path = Path(temp_dir) / "result.json"
+            run_directory = self.prepare_run_directory(temp_dir)
+            result_path = run_directory / "result.json"
             completed = subprocess.run(
                 [
                     self.binary.name,
@@ -220,7 +349,7 @@ class AnalyticalRunContractTest(unittest.TestCase):
                     "--result-manifest",
                     str(result_path),
                 ],
-                cwd=REPO_ROOT,
+                cwd=run_directory,
                 env=environment,
                 text=True,
                 stdout=subprocess.PIPE,
@@ -238,13 +367,16 @@ class AnalyticalRunContractTest(unittest.TestCase):
 
     def test_external_binary_relative_launch_has_resolved_digest(self):
         with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:
-            external_binary = Path(temp_dir) / "SimAI_analytical"
+            run_directory = self.prepare_run_directory(temp_dir)
+            external_binary = run_directory / "SimAI_analytical"
             shutil.copy2(self.binary, external_binary)
             expected_binary_sha256 = (
                 "sha256:" + hashlib.sha256(external_binary.read_bytes()).hexdigest()
             )
-            relative_binary = os.path.relpath(external_binary, REPO_ROOT)
-            result_path = Path(temp_dir) / "result.json"
+            relative_binary = os.path.relpath(external_binary, run_directory)
+            if os.sep not in relative_binary:
+                relative_binary = "." + os.sep + relative_binary
+            result_path = run_directory / "result.json"
             completed = subprocess.run(
                 [
                     str(relative_binary),
@@ -253,7 +385,7 @@ class AnalyticalRunContractTest(unittest.TestCase):
                     "--result-manifest",
                     str(result_path),
                 ],
-                cwd=REPO_ROOT,
+                cwd=run_directory,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

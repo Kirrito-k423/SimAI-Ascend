@@ -1,0 +1,102 @@
+{
+  "apiVersion": "simai.ascend.profile/v1alpha1",
+  "kind": "AscendHardwareProfile",
+  "schemaSemver": "0.1.0",
+  "metadata": {
+    "id": "synthetic-a2-four-rank-host"
+  },
+  "spec": {
+    "status": "READY_FOR_ANALYTICAL",
+    "identity": {
+      "vendor": "HUAWEI_ASCEND",
+      "generation": "A2",
+      "physicalChipCount": {
+        "status": "KNOWN",
+        "value": 4,
+        "unit": "count",
+        "evidenceRef": "profile-input",
+        "readiness": "FIELD_UNVERIFIED"
+      },
+      "managementDeviceCount": {
+        "status": "KNOWN",
+        "value": 4,
+        "unit": "count",
+        "evidenceRef": "profile-input",
+        "readiness": "FIELD_UNVERIFIED"
+      }
+    },
+    "rankGranularity": {
+      "trainingRankUnit": "CHIP",
+      "trainingRanksPerUnit": {
+        "status": "KNOWN",
+        "value": 1,
+        "unit": "count",
+        "evidenceRef": "profile-input",
+        "readiness": "FIELD_UNVERIFIED"
+      }
+    },
+    "compute": {
+      "capabilities": [
+        {
+          "opId": "GEMM",
+          "peakFLOPsPerS": {
+            "status": "KNOWN",
+            "value": 100000000000000,
+            "unit": "FLOP/s",
+            "evidenceRef": "profile-input",
+            "readiness": "FIELD_UNVERIFIED"
+          }
+        }
+      ]
+    },
+    "memory": {
+      "hbm": {
+        "installedCapacity": {
+          "status": "KNOWN",
+          "value": 68719476736,
+          "unit": "B",
+          "scope": "PER_PHYSICAL_CHIP",
+          "evidenceRef": "profile-input",
+          "readiness": "FIELD_UNVERIFIED"
+        },
+        "bandwidth": [
+          {
+            "direction": "READ_WRITE",
+            "value": 1000000000000,
+            "unit": "B/s",
+            "evidenceRef": "profile-input",
+            "readiness": "FIELD_UNVERIFIED"
+          }
+        ]
+      }
+    },
+    "topology": {
+      "levels": [
+        {
+          "scope": "HOST",
+          "rankCount": 4,
+          "topologyDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ]
+    },
+    "evidence": [
+      {
+        "id": "profile-input",
+        "class": "USER_INPUT",
+        "source": {
+          "uri": "fixture://issue-17/minimal-profile",
+          "ref": "worked-example-v1"
+        },
+        "method": {
+          "name": "public-worked-example",
+          "version": "1"
+        },
+        "asOf": "2026-08-18T00:00:00+08:00",
+        "conditions": {
+          "hardwareAvailable": false
+        },
+        "sanitization": "synthetic-no-host-data"
+      }
+    ]
+  }
+}
