@@ -1,0 +1,80 @@
+{
+  "apiVersion": "simai.ascend.observation/v1alpha1",
+  "kind": "HcclRawSample",
+  "schemaSemver": "0.2.0",
+  "metadata": {
+    "id": "test-only-a2-ep4-ar-1mib"
+  },
+  "spec": {
+    "profileRef": "test-only-a2-world8-profile",
+    "profileDigest": "sha256:ea5be8ae5b10058f23f5347ceb511d699b1f54b63133ea96e6a16ec41477291e",
+    "collective": "ALL_REDUCE",
+    "group": {
+      "id": "a2-ep-stage-0",
+      "rankCount": 4,
+      "scope": "EP_SUBGROUP",
+      "groupType": "EP",
+      "members": [0, 1, 2, 3],
+      "membershipDigest": "sha256:048b1f57e1bfc4b045fa6ccae438292d18391e624178291c08a34b758ee84388",
+      "topologyDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "payload": {
+      "bytesPerRank": {
+        "semantics": "API_INPUT_BYTES",
+        "uniformValue": 1048576,
+        "unit": "B"
+      },
+      "dtype": "BF16",
+      "reduction": "SUM"
+    },
+    "normalized": {
+      "averageTime": {
+        "value": 61943,
+        "unit": "ns"
+      },
+      "algBandwidth": {
+        "value": 16928014594,
+        "unit": "B/s"
+      }
+    },
+    "correctness": {
+      "status": "PASS"
+    },
+    "eligibility": {
+      "fit": true,
+      "reasons": []
+    },
+    "algorithm": {
+      "name": "RING",
+      "version": "test-contract-v2"
+    },
+    "statistics": {
+      "timingStatistic": "ARITHMETIC_MEAN",
+      "sampleCount": 5,
+      "warmupExcluded": true
+    },
+    "evidenceClass": "USER_INPUT",
+    "readiness": "FIELD_UNVERIFIED",
+    "evidenceRef": "a2-raw-input",
+    "evidence": [
+      {
+        "id": "a2-raw-input",
+        "class": "USER_INPUT",
+        "readiness": "FIELD_UNVERIFIED",
+        "source": {
+          "uri": "fixture://issue-21/a2-ep4-observation",
+          "ref": "test-only-v2"
+        },
+        "method": {
+          "name": "contract-fixture",
+          "version": "2"
+        },
+        "asOf": "2026-08-18T00:00:00+08:00",
+        "conditions": {
+          "hardwareAvailable": false
+        },
+        "sanitization": "test-only-synthetic-no-host-data"
+      }
+    ]
+  }
+}

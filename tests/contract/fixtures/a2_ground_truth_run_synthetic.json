@@ -39,6 +39,30 @@
       "trainingRanksPerDevice": 1,
       "rankMappingDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     },
+    "bindings": {
+      "profile": {
+        "id": "test-only-a2-world8-profile",
+        "sha256": "sha256:ea5be8ae5b10058f23f5347ceb511d699b1f54b63133ea96e6a16ec41477291e",
+        "evidenceClass": "USER_INPUT",
+        "readiness": "FIELD_UNVERIFIED",
+        "evidenceRef": "a2-profile-input"
+      },
+      "workload": {
+        "sha256": "sha256:2116c57e51c2a1bf286f13a738c027e4e07f76a3b8b38d884792fbcc0f31f7ec"
+      },
+      "topology": {
+        "worldSize": 8,
+        "rankMappingDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "hcclGroup": {
+        "id": "a2-ep-stage-0",
+        "groupType": "EP",
+        "rankCount": 4,
+        "members": [0, 1, 2, 3],
+        "membershipDigest": "sha256:048b1f57e1bfc4b045fa6ccae438292d18391e624178291c08a34b758ee84388",
+        "topologyDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
     "metricContract": {
       "stepTimeUnit": "ns",
       "peakHbmUnit": "B",
@@ -74,6 +98,7 @@
         "configuredGlobalTokens": 32768
       }
     ],
+    "evidenceRef": "test-only-frozen-contract",
     "evidence": {
       "id": "test-only-frozen-contract",
       "class": "USER_INPUT",

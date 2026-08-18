@@ -1,0 +1,38 @@
+{
+  "api_version": "simai.a2.sanitized-preflight/v1",
+  "kind": "A2SanitizedPreflightContract",
+  "version": "1.0.0",
+  "timeout_seconds": 30,
+  "checks": [
+    "CONNECTION_AUTHENTICATION",
+    "ARCHITECTURE_AND_OS",
+    "NPU_RANK_DEVICE_COUNT",
+    "DRIVER_IDENTITY",
+    "PYTHON_RUNTIME_IDENTITY",
+    "TORCH_IMPORT",
+    "TORCH_NPU_IMPORT",
+    "SOURCE_PIN_IDENTITY",
+    "SOURCE_CLEANLINESS",
+    "CANN_IDENTITY",
+    "HCCL_ABI_IDENTITY",
+    "ISOLATED_WHEEL_CACHE",
+    "PACKAGE_SOURCE_REACHABILITY",
+    "SHARED_LOCK_REACQUISITION"
+  ],
+  "stable_result_codes": [
+    "A2_PROBE_CONNECTED",
+    "A2_PROBE_AUTHENTICATION_FAILED",
+    "A2_TARGET_ENV_INCOMPLETE",
+    "A2_ABI_AND_SOURCE_INCOMPLETE",
+    "A2_PROBE_TIMEOUT"
+  ],
+  "output_policy": {
+    "aggregate_only": true,
+    "include_host_identity": false,
+    "include_account_identity": false,
+    "include_network_address": false,
+    "include_credentials": false,
+    "include_access_command": false,
+    "include_host_paths": false
+  }
+}

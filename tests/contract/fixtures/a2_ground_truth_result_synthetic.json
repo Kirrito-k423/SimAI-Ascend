@@ -6,7 +6,7 @@
     "generation": "A2"
   },
   "spec": {
-    "groundTruthRunDigest": "sha256:138b0c6a7311e2c1244106dd0e7db25a457dbce0ba3f42e4fb4a1bd872f4ee4b",
+    "groundTruthRunDigest": "sha256:3315f95d46353aa6a436f5475ac779a996df32aeab4ac5fa2ff71b08a794ef29",
     "status": "VALID",
     "block": {
       "reason": "NONE",
@@ -14,13 +14,37 @@
     },
     "rawObservations": [
       {
-        "path": "tests/contract/fixtures/minimal_hccl_allreduce_observation.json",
-        "sha256": "sha256:0abeb06593328bbabef9e7b5aa04008c0df6136c24256aaa262ecceedee12f58"
+        "path": "tests/contract/fixtures/a2_hccl_ep4_observation_synthetic.json",
+        "sha256": "sha256:925d27096d8d86c6f4d0fcac168acbbcbd4959c75ccd3415219faada7db34fa8"
       }
     ],
     "derivedCostModel": {
-      "path": "tests/contract/fixtures/minimal_hccl_allreduce_cost_model.json",
-      "sha256": "sha256:aa3be631b9a360f499c87c01832184121dff71173951683c95b46c7d6c0398b8"
+      "path": "tests/contract/fixtures/a2_hccl_ep4_cost_model_synthetic.json",
+      "sha256": "sha256:b2bb7f8d74cc536a819ee7474758636cd14353c5a60468c1a9dae25332580f90"
+    },
+    "bindings": {
+      "profile": {
+        "id": "test-only-a2-world8-profile",
+        "sha256": "sha256:ea5be8ae5b10058f23f5347ceb511d699b1f54b63133ea96e6a16ec41477291e",
+        "evidenceClass": "USER_INPUT",
+        "readiness": "FIELD_UNVERIFIED",
+        "evidenceRef": "a2-profile-input"
+      },
+      "workload": {
+        "sha256": "sha256:2116c57e51c2a1bf286f13a738c027e4e07f76a3b8b38d884792fbcc0f31f7ec"
+      },
+      "topology": {
+        "worldSize": 8,
+        "rankMappingDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "hcclGroup": {
+        "id": "a2-ep-stage-0",
+        "groupType": "EP",
+        "rankCount": 4,
+        "members": [0, 1, 2, 3],
+        "membershipDigest": "sha256:048b1f57e1bfc4b045fa6ccae438292d18391e624178291c08a34b758ee84388",
+        "topologyDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
     },
     "scenarios": [
       {
@@ -38,7 +62,7 @@
         "consumedTokens": 16384,
         "droppedTokens": 0,
         "replayedTokens": 0,
-        "provenanceDigest": "sha256:138b0c6a7311e2c1244106dd0e7db25a457dbce0ba3f42e4fb4a1bd872f4ee4b"
+        "provenanceDigest": "sha256:3315f95d46353aa6a436f5475ac779a996df32aeab4ac5fa2ff71b08a794ef29"
       },
       {
         "id": "A2-CAL-COMM",
@@ -55,7 +79,7 @@
         "consumedTokens": 16384,
         "droppedTokens": 0,
         "replayedTokens": 0,
-        "provenanceDigest": "sha256:138b0c6a7311e2c1244106dd0e7db25a457dbce0ba3f42e4fb4a1bd872f4ee4b"
+        "provenanceDigest": "sha256:3315f95d46353aa6a436f5475ac779a996df32aeab4ac5fa2ff71b08a794ef29"
       },
       {
         "id": "A2-CAL-LONG",
@@ -72,9 +96,10 @@
         "consumedTokens": 32768,
         "droppedTokens": 0,
         "replayedTokens": 0,
-        "provenanceDigest": "sha256:138b0c6a7311e2c1244106dd0e7db25a457dbce0ba3f42e4fb4a1bd872f4ee4b"
+        "provenanceDigest": "sha256:3315f95d46353aa6a436f5475ac779a996df32aeab4ac5fa2ff71b08a794ef29"
       }
     ],
+    "evidenceRef": "test-only-synthetic-result",
     "evidence": {
       "id": "test-only-synthetic-result",
       "class": "USER_INPUT",

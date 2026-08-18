@@ -810,6 +810,193 @@ bool EvidenceRecordIsComplete(const JsonValue& evidence) {
   return true;
 }
 
+bool A2EvidenceRecordIsExact(
+    const JsonValue& evidence,
+    std::string* id,
+    std::string* evidence_class,
+    std::string* readiness,
+    bool* hardware_available) {
+  const JsonValue* source = Member(evidence, "source");
+  const JsonValue* method = Member(evidence, "method");
+  const JsonValue* conditions = Member(evidence, "conditions");
+  if (!ObjectHasExactKeys(
+          evidence,
+          {"id", "class", "readiness", "source", "method", "asOf",
+           "conditions", "sanitization"}) ||
+      source == nullptr ||
+      !ObjectHasExactKeys(*source, {"uri", "ref"}) ||
+      method == nullptr ||
+      !ObjectHasExactKeys(*method, {"name", "version"}) ||
+      conditions == nullptr ||
+      !ObjectHasExactKeys(*conditions, {"hardwareAvailable"}) ||
+      !EvidenceRecordIsComplete(evidence) ||
+      !StringMember(evidence, "id", id) || id->empty() ||
+      !StringMember(evidence, "class", evidence_class) ||
+      !StringMember(evidence, "readiness", readiness) ||
+      (*readiness != "FIELD_UNVERIFIED" &&
+       *readiness != "FIELD_VERIFIED") ||
+      !BooleanMember(
+          *conditions, "hardwareAvailable", hardware_available)) {
+    return false;
+  }
+  return !(*readiness == "FIELD_UNVERIFIED" &&
+           *evidence_class == "MEASURED");
+}
+
+bool ParseExactRankMembers(
+    const JsonValue& members,
+    int world_size,
+    std::vector<int>* parsed) {
+  if (members.type != JsonValue::Type::Array || members.array.empty()) {
+    return false;
+  }
+  parsed->clear();
+  int previous = -1;
+  for (const JsonValue& member : members.array) {
+    uint64_t rank = 0U;
+    if (!ExactUnsignedDecimal(
+            member,
+            static_cast<uint64_t>(std::numeric_limits<int>::max()),
+            true,
+            &rank) ||
+        rank >= static_cast<uint64_t>(world_size) ||
+        static_cast<int>(rank) <= previous) {
+      return false;
+    }
+    previous = static_cast<int>(rank);
+    parsed->push_back(previous);
+  }
+  return true;
+}
+
+std::string A2MembershipDigest(
+    const std::string& id,
+    const std::string& group_type,
+    const std::vector<int>& members,
+    const std::string& topology_digest) {
+  std::ostringstream canonical;
+  canonical << id << "|" << group_type << "|";
+  for (size_t index = 0U; index < members.size(); ++index) {
+    if (index != 0U) {
+      canonical << ",";
+    }
+    canonical << members[index];
+  }
+  canonical << "|" << topology_digest;
+  return "sha256:" + Sha256Hex(canonical.str());
+}
+
+struct A2SemanticBindings {
+  std::string profile_id;
+  std::string profile_sha256;
+  std::string profile_evidence_class;
+  std::string profile_readiness;
+  std::string profile_evidence_ref;
+  std::string workload_sha256;
+  int world_size = 0;
+  std::string topology_sha256;
+  std::string group_id;
+  std::string group_type;
+  int group_rank_count = 0;
+  std::vector<int> group_members;
+  std::string group_membership_sha256;
+};
+
+bool ParseA2SemanticBindings(
+    const JsonValue& bindings,
+    A2SemanticBindings* parsed) {
+  const JsonValue* profile = Member(bindings, "profile");
+  const JsonValue* workload = Member(bindings, "workload");
+  const JsonValue* topology = Member(bindings, "topology");
+  const JsonValue* group = Member(bindings, "hcclGroup");
+  const JsonValue* members = group == nullptr ? nullptr : Member(*group, "members");
+  if (!ObjectHasExactKeys(
+          bindings, {"profile", "workload", "topology", "hcclGroup"}) ||
+      profile == nullptr ||
+      !ObjectHasExactKeys(
+          *profile,
+          {"id", "sha256", "evidenceClass", "readiness", "evidenceRef"}) ||
+      !StringMember(*profile, "id", &parsed->profile_id) ||
+      parsed->profile_id.empty() ||
+      !StringMember(*profile, "sha256", &parsed->profile_sha256) ||
+      !IsSha256Identifier(parsed->profile_sha256) ||
+      !StringMember(
+          *profile, "evidenceClass", &parsed->profile_evidence_class) ||
+      (parsed->profile_evidence_class != "USER_INPUT" &&
+       parsed->profile_evidence_class != "MEASURED") ||
+      !StringMember(*profile, "readiness", &parsed->profile_readiness) ||
+      (parsed->profile_readiness != "FIELD_UNVERIFIED" &&
+       parsed->profile_readiness != "FIELD_VERIFIED") ||
+      !StringMember(
+          *profile, "evidenceRef", &parsed->profile_evidence_ref) ||
+      parsed->profile_evidence_ref.empty() || workload == nullptr ||
+      !ObjectHasExactKeys(*workload, {"sha256"}) ||
+      !StringMember(*workload, "sha256", &parsed->workload_sha256) ||
+      !IsSha256Identifier(parsed->workload_sha256) || topology == nullptr ||
+      !ObjectHasExactKeys(
+          *topology, {"worldSize", "rankMappingDigest"}) ||
+      !ExactPositiveIntMember(*topology, "worldSize", &parsed->world_size) ||
+      parsed->world_size != 8 ||
+      !StringMember(
+          *topology, "rankMappingDigest", &parsed->topology_sha256) ||
+      !IsSha256Identifier(parsed->topology_sha256) || group == nullptr ||
+      !ObjectHasExactKeys(
+          *group,
+          {"id", "groupType", "rankCount", "members",
+           "membershipDigest", "topologyDigest"}) ||
+      !StringMember(*group, "id", &parsed->group_id) ||
+      parsed->group_id.empty() ||
+      !StringMember(*group, "groupType", &parsed->group_type) ||
+      (parsed->group_type != "TP" && parsed->group_type != "DP" &&
+       parsed->group_type != "EP") ||
+      !ExactPositiveIntMember(
+          *group, "rankCount", &parsed->group_rank_count) ||
+      members == nullptr ||
+      !ParseExactRankMembers(
+          *members, parsed->world_size, &parsed->group_members) ||
+      parsed->group_members.size() !=
+          static_cast<size_t>(parsed->group_rank_count) ||
+      !StringMember(
+          *group,
+          "membershipDigest",
+          &parsed->group_membership_sha256) ||
+      !IsSha256Identifier(parsed->group_membership_sha256)) {
+    return false;
+  }
+  std::string group_topology_digest;
+  if (!StringMember(
+          *group, "topologyDigest", &group_topology_digest) ||
+      group_topology_digest != parsed->topology_sha256 ||
+      parsed->group_membership_sha256 !=
+          A2MembershipDigest(
+              parsed->group_id,
+              parsed->group_type,
+              parsed->group_members,
+              parsed->topology_sha256)) {
+    return false;
+  }
+  const int expected_rank_count = parsed->group_type == "TP" ? 1 : 4;
+  return parsed->group_rank_count == expected_rank_count;
+}
+
+bool A2BindingsEqual(
+    const A2SemanticBindings& left,
+    const A2SemanticBindings& right) {
+  return left.profile_id == right.profile_id &&
+      left.profile_sha256 == right.profile_sha256 &&
+      left.profile_evidence_class == right.profile_evidence_class &&
+      left.profile_readiness == right.profile_readiness &&
+      left.profile_evidence_ref == right.profile_evidence_ref &&
+      left.workload_sha256 == right.workload_sha256 &&
+      left.world_size == right.world_size &&
+      left.topology_sha256 == right.topology_sha256 &&
+      left.group_id == right.group_id &&
+      left.group_type == right.group_type &&
+      left.group_rank_count == right.group_rank_count &&
+      left.group_members == right.group_members &&
+      left.group_membership_sha256 == right.group_membership_sha256;
+}
+
 bool BuildEvidenceClassIndex(
     const JsonValue& spec,
     std::map<std::string, std::string>* evidence_classes) {
@@ -2836,6 +3023,9 @@ bool GroundTruthRunHasFrozenContract(
   const JsonValue* scenarios = spec == nullptr
       ? nullptr
       : Member(*spec, "scenarios");
+  const JsonValue* bindings = spec == nullptr
+      ? nullptr
+      : Member(*spec, "bindings");
   const JsonValue* evidence = spec == nullptr
       ? nullptr
       : Member(*spec, "evidence");
@@ -2876,6 +3066,12 @@ bool GroundTruthRunHasFrozenContract(
   std::string high_variation_statistic;
   int hbm_percent = 0;
   std::string hbm_comparison;
+  std::string evidence_ref;
+  std::string evidence_id;
+  std::string evidence_class;
+  std::string evidence_readiness;
+  bool evidence_hardware_available = false;
+  A2SemanticBindings semantic_bindings;
   if (!ObjectHasExactKeys(root, {"apiVersion", "kind", "metadata", "spec"}) ||
       !StringMember(root, "apiVersion", &api_version) ||
       api_version != "simai.ground-truth/v1" ||
@@ -2889,7 +3085,8 @@ bool GroundTruthRunHasFrozenContract(
       !ObjectHasExactKeys(
           *spec,
           {"sourceIdentity", "runtimeIdentity", "model", "parallelism",
-           "rankTopology", "metricContract", "scenarios", "evidence"}) ||
+           "rankTopology", "bindings", "metricContract", "scenarios",
+           "evidenceRef", "evidence"}) ||
       source == nullptr ||
       !ObjectHasExactKeys(
           *source,
@@ -2972,7 +3169,19 @@ bool GroundTruthRunHasFrozenContract(
       !StringMember(*metrics, "hbmComparison", &hbm_comparison) ||
       hbm_comparison != "STRICTLY_LESS_THAN" || scenarios == nullptr ||
       scenarios->type != JsonValue::Type::Array || scenarios->array.size() != 3U ||
-      evidence == nullptr || !EvidenceRecordIsComplete(*evidence)) {
+      bindings == nullptr ||
+      !ParseA2SemanticBindings(*bindings, &semantic_bindings) ||
+      semantic_bindings.world_size != world_size ||
+      semantic_bindings.topology_sha256 != rank_mapping_digest ||
+      evidence == nullptr ||
+      !StringMember(*spec, "evidenceRef", &evidence_ref) ||
+      !A2EvidenceRecordIsExact(
+          *evidence,
+          &evidence_id,
+          &evidence_class,
+          &evidence_readiness,
+          &evidence_hardware_available) ||
+      evidence_ref != evidence_id || evidence_class != "USER_INPUT") {
     Reject(
         contract,
         "A2_GROUND_TRUTH_RUN_INVALID",
@@ -2980,6 +3189,26 @@ bool GroundTruthRunHasFrozenContract(
         "Use the exact A2 reduced-MoE GroundTruth Run v1 contract.");
     return false;
   }
+  contract->a2_run_evidence_level = evidence_class;
+  contract->a2_run_field_readiness = evidence_readiness;
+  contract->a2_run_evidence_ref = evidence_ref;
+  contract->a2_run_hardware_available = evidence_hardware_available;
+  contract->a2_bound_profile_id = semantic_bindings.profile_id;
+  contract->a2_bound_profile_sha256 = semantic_bindings.profile_sha256;
+  contract->a2_bound_profile_evidence_level =
+      semantic_bindings.profile_evidence_class;
+  contract->a2_bound_profile_field_readiness =
+      semantic_bindings.profile_readiness;
+  contract->a2_bound_profile_evidence_ref =
+      semantic_bindings.profile_evidence_ref;
+  contract->a2_bound_workload_sha256 = semantic_bindings.workload_sha256;
+  contract->a2_bound_topology_sha256 = semantic_bindings.topology_sha256;
+  contract->a2_bound_group_id = semantic_bindings.group_id;
+  contract->a2_bound_group_type = semantic_bindings.group_type;
+  contract->a2_bound_group_rank_count = semantic_bindings.group_rank_count;
+  contract->a2_bound_group_members = semantic_bindings.group_members;
+  contract->a2_bound_group_membership_sha256 =
+      semantic_bindings.group_membership_sha256;
   const std::array<std::string, 3> ids = {{
       "A2-CAL-BALANCED", "A2-CAL-COMM", "A2-CAL-LONG"}};
   const std::array<uint64_t, 3> sequences = {{2048U, 1024U, 4096U}};
@@ -3034,6 +3263,22 @@ bool ValidateA2GroundTruth(
         "A2_GROUND_TRUTH_ENVELOPE_INVALID",
         "The A2 GroundTruth envelope is invalid.",
         "Provide exact content-addressed GroundTruth Run and Result references.");
+    return false;
+  }
+  if (!ObjectHasExactKeys(*run_reference, {"path", "sha256"})) {
+    Reject(
+        contract,
+        "A2_GROUND_TRUTH_RUN_REFERENCE_INVALID",
+        "The GroundTruth Run reference has unknown or missing fields.",
+        "Provide exactly path and SHA-256.");
+    return false;
+  }
+  if (!ObjectHasExactKeys(*result_reference, {"path", "sha256"})) {
+    Reject(
+        contract,
+        "A2_GROUND_TRUTH_RESULT_REFERENCE_INVALID",
+        "The GroundTruth Result reference has unknown or missing fields.",
+        "Provide exactly path and SHA-256.");
     return false;
   }
   const ArtifactLoadPolicy run_policy = {
@@ -3101,6 +3346,9 @@ bool ValidateA2GroundTruth(
   const JsonValue* scenarios = spec == nullptr
       ? nullptr
       : Member(*spec, "scenarios");
+  const JsonValue* bindings = spec == nullptr
+      ? nullptr
+      : Member(*spec, "bindings");
   const JsonValue* evidence = spec == nullptr
       ? nullptr
       : Member(*spec, "evidence");
@@ -3114,6 +3362,28 @@ bool ValidateA2GroundTruth(
   std::string block_remediation;
   std::string evidence_class;
   std::string evidence_readiness;
+  std::string evidence_ref;
+  std::string evidence_id;
+  bool evidence_hardware_available = false;
+  A2SemanticBindings result_bindings;
+  A2SemanticBindings run_bindings;
+  run_bindings.profile_id = contract->a2_bound_profile_id;
+  run_bindings.profile_sha256 = contract->a2_bound_profile_sha256;
+  run_bindings.profile_evidence_class =
+      contract->a2_bound_profile_evidence_level;
+  run_bindings.profile_readiness =
+      contract->a2_bound_profile_field_readiness;
+  run_bindings.profile_evidence_ref =
+      contract->a2_bound_profile_evidence_ref;
+  run_bindings.workload_sha256 = contract->a2_bound_workload_sha256;
+  run_bindings.world_size = 8;
+  run_bindings.topology_sha256 = contract->a2_bound_topology_sha256;
+  run_bindings.group_id = contract->a2_bound_group_id;
+  run_bindings.group_type = contract->a2_bound_group_type;
+  run_bindings.group_rank_count = contract->a2_bound_group_rank_count;
+  run_bindings.group_members = contract->a2_bound_group_members;
+  run_bindings.group_membership_sha256 =
+      contract->a2_bound_group_membership_sha256;
   if (!ObjectHasExactKeys(
           result.document, {"apiVersion", "kind", "metadata", "spec"}) ||
       !StringMember(result.document, "apiVersion", &api_version) ||
@@ -3127,7 +3397,8 @@ bool ValidateA2GroundTruth(
       !ObjectHasExactKeys(
           *spec,
           {"groundTruthRunDigest", "status", "block", "rawObservations",
-           "derivedCostModel", "scenarios", "evidence"}) ||
+           "derivedCostModel", "bindings", "scenarios", "evidenceRef",
+           "evidence"}) ||
       !StringMember(*spec, "groundTruthRunDigest", &run_digest) ||
       run_digest != run.sha256 || !StringMember(*spec, "status", &status) ||
       block == nullptr ||
@@ -3137,10 +3408,18 @@ bool ValidateA2GroundTruth(
       raw_observations == nullptr ||
       raw_observations->type != JsonValue::Type::Array || derived == nullptr ||
       scenarios == nullptr || scenarios->type != JsonValue::Type::Array ||
-      evidence == nullptr ||
-      !EvidenceRecordIsComplete(*evidence) ||
-      !StringMember(*evidence, "class", &evidence_class) ||
-      !StringMember(*evidence, "readiness", &evidence_readiness)) {
+      bindings == nullptr ||
+      !ParseA2SemanticBindings(*bindings, &result_bindings) ||
+      !A2BindingsEqual(run_bindings, result_bindings) || evidence == nullptr ||
+      !StringMember(*spec, "evidenceRef", &evidence_ref) ||
+      !A2EvidenceRecordIsExact(
+          *evidence,
+          &evidence_id,
+          &evidence_class,
+          &evidence_readiness,
+          &evidence_hardware_available) ||
+      evidence_ref != evidence_id ||
+      (evidence_class != "USER_INPUT" && evidence_class != "MEASURED")) {
     Reject(
         contract,
         "A2_GROUND_TRUTH_RESULT_INVALID",
@@ -3151,6 +3430,8 @@ bool ValidateA2GroundTruth(
   contract->a2_ground_truth_status = status;
   contract->a2_ground_truth_evidence_level = evidence_class;
   contract->a2_ground_truth_field_readiness = evidence_readiness;
+  contract->a2_result_evidence_ref = evidence_ref;
+  contract->a2_result_hardware_available = evidence_hardware_available;
   if (status == "BLOCKED_ENV") {
     const bool supported_block =
         (block_reason == "A2_HCCL_ABI_UNAVAILABLE" &&
@@ -3185,13 +3466,42 @@ bool ValidateA2GroundTruth(
     contract->remediation = block_remediation;
     return false;
   }
-  if (status != "VALID" || block_reason != "NONE" ||
-      block_remediation != "NONE") {
+  if (status == "INVALID_ACCURACY_EXECUTION") {
+    const bool supported_subtype =
+        block_reason == "A2_OOM" ||
+        block_reason == "A2_HBM_LIMIT_REACHED" ||
+        block_reason == "A2_RANK_LOSS" ||
+        block_reason == "A2_NON_FINITE" ||
+        block_reason == "A2_TOKEN_LOSS" ||
+        block_reason == "A2_TOKEN_REPLAY" ||
+        block_reason == "A2_PROVENANCE_DRIFT";
+    if (!supported_subtype ||
+        block_remediation !=
+            "Correct the execution and repeat the unchanged frozen scenario." ||
+        !raw_observations->array.empty() ||
+        derived->type != JsonValue::Type::Null ||
+        !scenarios->array.empty()) {
+      Reject(
+          contract,
+          "A2_INVALID_ACCURACY_RESULT_INVALID",
+          "An INVALID_ACCURACY_EXECUTION result must preserve one controlled subtype and contain no fitted data.",
+          "Use one frozen execution subtype and remove raw observations, scenarios, and model.");
+      return false;
+    }
     RejectAccuracyExecution(
         contract,
-        "A2_GROUND_TRUTH_EXECUTION_INVALID",
+        block_reason,
         "The A2 GroundTruth Result is not eligible for calibration.",
-        "Rerun the frozen scenario after correcting its execution failure.");
+        block_remediation);
+    return false;
+  }
+  if (status != "VALID" || block_reason != "NONE" ||
+      block_remediation != "NONE") {
+    Reject(
+        contract,
+        "A2_GROUND_TRUTH_RESULT_INVALID",
+        "The A2 GroundTruth Result discriminated state is invalid.",
+        "Use VALID, BLOCKED_ENV, or INVALID_ACCURACY_EXECUTION with its exact payload.");
     return false;
   }
   if (raw_observations->array.empty() ||
@@ -3341,11 +3651,11 @@ bool ValidateA2GroundTruth(
         !ExactNonNegativeUint64Member(scenario, "droppedTokens", &dropped) ||
         !ExactNonNegativeUint64Member(scenario, "replayedTokens", &replayed) ||
         !StringMember(scenario, "provenanceDigest", &provenance_digest)) {
-      RejectAccuracyExecution(
+      Reject(
           contract,
-          "A2_GROUND_TRUTH_EXECUTION_INCOMPLETE",
+          "A2_GROUND_TRUTH_SCENARIO_INVALID",
           "An A2 scenario is incomplete or malformed.",
-          "Repeat the frozen scenario with every required metric and rank.");
+          "Provide exact typed fields for the frozen scenario.");
       return false;
     }
     A2GroundTruthScenarioInput scenario_input;
@@ -3392,6 +3702,9 @@ bool ValidateA2GroundTruth(
     BooleanMember(*conditions, "hardwareAvailable", &hardware_available);
   }
   contract->a2_calibration_eligible =
+      contract->a2_run_evidence_level == "USER_INPUT" &&
+      contract->a2_run_field_readiness == "FIELD_VERIFIED" &&
+      contract->a2_run_hardware_available &&
       evidence_class == "MEASURED" &&
       evidence_readiness == "FIELD_VERIFIED" && hardware_available;
   contract->a2_derived_cost_model_sha256 = derived_digest;
@@ -3407,6 +3720,8 @@ struct ValidatedAscendProfile {
   std::string topology_digest;
   std::string evidence_level;
   std::string field_readiness;
+  std::string evidence_ref;
+  bool hardware_available = false;
 };
 
 bool ValidateAscendProfile(
@@ -3458,6 +3773,9 @@ bool ValidateAscendProfile(
       topology == nullptr ? nullptr : FirstArrayObject(*topology, "levels");
   const JsonValue* first_evidence =
       spec == nullptr ? nullptr : FirstArrayObject(*spec, "evidence");
+  const JsonValue* first_evidence_conditions = first_evidence == nullptr
+      ? nullptr
+      : Member(*first_evidence, "conditions");
 
   if (spec != nullptr && topology_level == nullptr) {
     RejectUnsupported(
@@ -3538,6 +3856,12 @@ bool ValidateAscendProfile(
       first_evidence == nullptr ||
       !StringMember(
           *first_evidence, "class", &validated->evidence_level) ||
+      !StringMember(*first_evidence, "id", &validated->evidence_ref) ||
+      validated->evidence_ref.empty() || first_evidence_conditions == nullptr ||
+      !BooleanMember(
+          *first_evidence_conditions,
+          "hardwareAvailable",
+          &validated->hardware_available) ||
       !EvidenceRecordIsComplete(*first_evidence)) {
     Reject(
         contract,
@@ -3587,6 +3911,12 @@ struct ValidatedHcclCostModel {
   std::string reduction;
   std::string evidence_level;
   std::string field_readiness;
+  std::string evidence_ref;
+  bool hardware_available = false;
+  std::string group_id;
+  std::string group_scope;
+  std::vector<int> group_members;
+  std::string group_membership_sha256;
   std::string routing_digest;
   std::string raw_metadata_compatibility;
 };
@@ -3973,11 +4303,15 @@ bool ValidateHcclCostModel(
         "Use DERIVED evidence or verify every consumed model field.");
     return false;
   }
+  const bool schema_declared =
+      StringMember(model, "schemaSemver", &schema_semver);
+  const bool a2_extended_schema = schema_semver == "0.2.0";
   if (!StringMember(model, "apiVersion", &api_version) ||
       api_version != "simai.ascend.costmodel/v1alpha1" ||
       !StringMember(model, "kind", &kind) || kind != "HcclCostModel" ||
-      !StringMember(model, "schemaSemver", &schema_semver) ||
-      schema_semver != "0.1.0" || metadata == nullptr ||
+      !schema_declared ||
+      (schema_semver != "0.1.0" && !a2_extended_schema) ||
+      metadata == nullptr ||
       !StringMember(*metadata, "id", &validated->config.model_id) ||
       validated->config.model_id.empty() || spec == nullptr ||
       !StringMember(*spec, "profileDigest", &model_profile_digest) ||
@@ -4011,8 +4345,12 @@ bool ValidateHcclCostModel(
           *group_domain, "scopes", &model_topology_domain) ||
       !FirstArrayString(
           *group_domain, "topologyDigests", &model_topology_digest) ||
-      rank_count != profile.rank_count ||
-      model_topology_domain != profile.topology_domain ||
+      (a2_extended_schema
+           ? (rank_count > profile.rank_count || rank_count < 1)
+           : rank_count != profile.rank_count) ||
+      (a2_extended_schema
+           ? model_topology_domain != group_type + "_SUBGROUP"
+           : model_topology_domain != profile.topology_domain) ||
       model_topology_digest != profile.topology_digest ||
       message_domain == nullptr ||
       !PositiveUint64Member(
@@ -4069,12 +4407,15 @@ bool ValidateHcclCostModel(
       !StringMember(*spec, "evidenceClass", &validated->evidence_level) ||
       validated->evidence_level != "DERIVED" ||
       !StringMember(*spec, "readiness", &validated->field_readiness) ||
-      validated->field_readiness != "FIELD_UNVERIFIED" ||
+      (a2_extended_schema
+           ? (validated->field_readiness != "FIELD_UNVERIFIED" &&
+              validated->field_readiness != "FIELD_VERIFIED")
+           : validated->field_readiness != "FIELD_UNVERIFIED") ||
       extrapolation == nullptr ||
       !BooleanMember(
           *extrapolation, "allowed", &extrapolation_allowed) ||
       extrapolation_allowed || !UnitsAreCanonical(model) ||
-      ContainsString(model, "MEASURED")) {
+      (!a2_extended_schema && ContainsString(model, "MEASURED"))) {
     if (segment_failure == SegmentParseFailure::NonMonotonic) {
       Reject(
           contract,
@@ -4089,6 +4430,108 @@ bool ValidateHcclCostModel(
         "The HCCL DerivedCostModel or its domain is invalid.",
         "Provide a non-extrapolating collective model matching the Profile.");
     return false;
+  }
+
+  if (a2_extended_schema) {
+    const JsonValue* group_ids = Member(*group_domain, "groupIds");
+    const JsonValue* member_ranks = Member(*group_domain, "memberRanks");
+    const JsonValue* membership_digests =
+        Member(*group_domain, "membershipDigests");
+    const JsonValue* evidence_records = Member(*spec, "evidence");
+    const JsonValue* evidence_record =
+        evidence_records == nullptr || evidence_records->type != JsonValue::Type::Array ||
+            evidence_records->array.size() != 1U
+        ? nullptr
+        : &evidence_records->array.front();
+    std::string evidence_id;
+    std::string evidence_class;
+    std::string evidence_readiness;
+    bool evidence_hardware_available = false;
+    const bool exact_schema =
+        ObjectHasExactKeys(
+            model, {"apiVersion", "kind", "schemaSemver", "metadata", "spec"}) &&
+        ObjectHasExactKeys(*metadata, {"id"}) &&
+        ObjectHasExactKeys(
+            *spec,
+            {"profileDigest", "collective", "dtype", "reduction",
+             "timingScope", "groupDomain", "messageDomainBytes",
+             "inputSamples", "fit", "traffic", "evidenceClass",
+             "readiness", "evidenceRef", "evidence", "extrapolation"}) &&
+        ObjectHasExactKeys(
+            *group_domain,
+            {"rankCounts", "groupTypes", "scopes", "topologyDigests",
+             "groupIds", "memberRanks", "membershipDigests"}) &&
+        ObjectHasExactKeys(*message_domain, {"min", "max", "unit"}) &&
+        ObjectHasExactKeys(
+            *fit,
+            {"family", "formula", "startup", "bandwidth", "interpolation"}) &&
+        startup != nullptr &&
+        ObjectHasExactKeys(*startup, {"value", "unit"}) &&
+        bandwidth != nullptr &&
+        ObjectHasExactKeys(*bandwidth, {"value", "unit"}) &&
+        ObjectHasExactKeys(*traffic, {"algorithm", "semantics"}) &&
+        ObjectHasExactKeys(*extrapolation, {"allowed", "policy"}) &&
+        input_samples->array.size() == 1U &&
+        ObjectHasExactKeys(
+            input_samples->array.front(), {"id", "path", "sha256"}) &&
+        evidence_record != nullptr &&
+        A2EvidenceRecordIsExact(
+            *evidence_record,
+            &evidence_id,
+            &evidence_class,
+            &evidence_readiness,
+            &evidence_hardware_available) &&
+        StringMember(*spec, "evidenceRef", &validated->evidence_ref) &&
+        validated->evidence_ref == evidence_id &&
+        evidence_class == validated->evidence_level &&
+        evidence_readiness == validated->field_readiness &&
+        group_ids != nullptr && group_ids->type == JsonValue::Type::Array &&
+        group_ids->array.size() == 1U &&
+        member_ranks != nullptr && member_ranks->type == JsonValue::Type::Array &&
+        member_ranks->array.size() == 1U &&
+        membership_digests != nullptr &&
+        membership_digests->type == JsonValue::Type::Array &&
+        membership_digests->array.size() == 1U;
+    if (!exact_schema) {
+      Reject(
+          contract,
+          "HCCL_COST_MODEL_SCHEMA_INVALID",
+          "The A2 HCCL cost model v0.2 schema is not exact.",
+          "Remove unknown fields and resolve every evidence reference.");
+      return false;
+    }
+    std::string membership_digest;
+    if (group_ids->array.front().type == JsonValue::Type::String) {
+      validated->group_id = group_ids->array.front().string;
+    }
+    if (membership_digests->array.front().type == JsonValue::Type::String) {
+      membership_digest = membership_digests->array.front().string;
+    }
+    const int expected_group_rank_count = group_type == "TP" ? 1 : 4;
+    if (validated->group_id.empty() ||
+        !ParseExactRankMembers(
+            member_ranks->array.front(),
+            profile.rank_count,
+            &validated->group_members) ||
+        validated->group_members.size() != static_cast<size_t>(rank_count) ||
+        rank_count != expected_group_rank_count ||
+        !IsSha256Identifier(membership_digest) ||
+        membership_digest !=
+            A2MembershipDigest(
+                validated->group_id,
+                group_type,
+                validated->group_members,
+                model_topology_digest)) {
+      Reject(
+          contract,
+          "HCCL_COST_MODEL_GROUP_INVALID",
+          "The A2 model group is not a legal frozen-topology subgroup.",
+          "Use a legal TP, DP, or EP membership and its canonical digest.");
+      return false;
+    }
+    validated->group_membership_sha256 = membership_digest;
+    validated->group_scope = model_topology_domain;
+    validated->hardware_available = evidence_hardware_available;
   }
 
   if (validated->config.segments.empty()) {
@@ -4165,6 +4608,11 @@ bool ValidateHcclCostModel(
 struct ValidatedRawObservation {
   std::string evidence_level;
   std::string field_readiness;
+  std::string evidence_ref;
+  bool hardware_available = false;
+  std::string group_id;
+  std::vector<int> group_members;
+  std::string group_membership_sha256;
 };
 
 bool ValidateRawObservation(
@@ -4227,6 +4675,9 @@ bool ValidateRawObservation(
   double normalized_bandwidth_Bps = 0.0;
   bool eligible_for_fit = false;
   bool warmup_excluded = false;
+  const bool schema_declared =
+      StringMember(raw, "schemaSemver", &schema_semver);
+  const bool a2_extended_schema = schema_semver == "0.2.0";
   const bool payload_value_valid = bytes_per_rank != nullptr &&
       (model.collective == "ALL_TO_ALL_V"
            ? (PositiveUint64Member(
@@ -4255,8 +4706,9 @@ bool ValidateRawObservation(
   if (!StringMember(raw, "apiVersion", &api_version) ||
       api_version != "simai.ascend.observation/v1alpha1" ||
       !StringMember(raw, "kind", &kind) || kind != "HcclRawSample" ||
-      !StringMember(raw, "schemaSemver", &schema_semver) ||
-      schema_semver != "0.1.0" || metadata == nullptr ||
+      !schema_declared ||
+      (schema_semver != "0.1.0" && !a2_extended_schema) ||
+      metadata == nullptr ||
       !StringMember(*metadata, "id", &raw_id) ||
       raw_id != model.input_sample_id || spec == nullptr ||
       !StringMember(*spec, "profileRef", &profile_ref) ||
@@ -4266,9 +4718,10 @@ bool ValidateRawObservation(
       !StringMember(*spec, "collective", &collective) ||
       collective != model.collective || group == nullptr ||
       !PositiveIntMember(*group, "rankCount", &rank_count) ||
-      rank_count != model.config.rank_count ||
+      (!a2_extended_schema && rank_count != model.config.rank_count) ||
       !StringMember(*group, "scope", &scope) ||
-      scope != profile.topology_domain ||
+      scope != (a2_extended_schema ? model.group_scope
+                                   : model.config.topology_domain) ||
       !StringMember(*group, "groupType", &group_type) ||
       group_type != AstraSim::CostedGroupTypeName(model.config.group_type) ||
       !StringMember(*group, "topologyDigest", &topology_digest) ||
@@ -4296,7 +4749,10 @@ bool ValidateRawObservation(
           *first_evidence, "class", &validated->evidence_level) ||
       !StringMember(
           *first_evidence, "readiness", &validated->field_readiness) ||
-      validated->field_readiness != "FIELD_UNVERIFIED" ||
+      (a2_extended_schema
+           ? (validated->field_readiness != "FIELD_UNVERIFIED" &&
+              validated->field_readiness != "FIELD_VERIFIED")
+           : validated->field_readiness != "FIELD_UNVERIFIED") ||
       !EvidenceRecordIsComplete(*first_evidence) || correctness == nullptr ||
       !StringMember(*correctness, "status", &correctness_status) ||
       correctness_status != "PASS" || eligibility == nullptr ||
@@ -4304,13 +4760,108 @@ bool ValidateRawObservation(
       !eligible_for_fit ||
       (!has_canonical_metadata && !uses_issue17_metadata_compatibility) ||
       !UnitsAreCanonical(raw) ||
-      ContainsString(raw, "MEASURED")) {
+      (!a2_extended_schema && ContainsString(raw, "MEASURED"))) {
     Reject(
         contract,
         "RAW_OBSERVATION_SCHEMA_INVALID",
         "The immutable HCCL RawObservation is invalid or out of domain.",
         "Use a canonical-unit HCCL observation matching Profile and model.");
     return false;
+  }
+
+  if (a2_extended_schema) {
+    const JsonValue* members = Member(*group, "members");
+    const JsonValue* evidence_records = Member(*spec, "evidence");
+    const JsonValue* evidence_record =
+        evidence_records == nullptr || evidence_records->type != JsonValue::Type::Array ||
+            evidence_records->array.size() != 1U
+        ? nullptr
+        : &evidence_records->array.front();
+    const JsonValue* reasons = Member(*eligibility, "reasons");
+    std::string declared_evidence_class;
+    std::string declared_readiness;
+    std::string evidence_id;
+    std::string evidence_class;
+    std::string evidence_readiness;
+    bool evidence_hardware_available = false;
+    const bool exact_schema =
+        ObjectHasExactKeys(
+            raw, {"apiVersion", "kind", "schemaSemver", "metadata", "spec"}) &&
+        ObjectHasExactKeys(*metadata, {"id"}) &&
+        ObjectHasExactKeys(
+            *spec,
+            {"profileRef", "profileDigest", "collective", "group", "payload",
+             "normalized", "correctness", "eligibility", "algorithm",
+             "statistics", "evidenceClass", "readiness", "evidenceRef",
+             "evidence"}) &&
+        ObjectHasExactKeys(
+            *group,
+            {"id", "rankCount", "scope", "groupType", "members",
+             "membershipDigest", "topologyDigest"}) &&
+        ObjectHasExactKeys(*payload, {"bytesPerRank", "dtype", "reduction"}) &&
+        ObjectHasExactKeys(
+            *bytes_per_rank, {"semantics", "uniformValue", "unit"}) &&
+        ObjectHasExactKeys(*normalized, {"averageTime", "algBandwidth"}) &&
+        ObjectHasExactKeys(*average_time, {"value", "unit"}) &&
+        ObjectHasExactKeys(*alg_bandwidth, {"value", "unit"}) &&
+        ObjectHasExactKeys(*correctness, {"status"}) &&
+        ObjectHasExactKeys(*eligibility, {"fit", "reasons"}) &&
+        reasons != nullptr && reasons->type == JsonValue::Type::Array &&
+        reasons->array.empty() &&
+        ObjectHasExactKeys(*algorithm, {"name", "version"}) &&
+        ObjectHasExactKeys(
+            *statistics,
+            {"timingStatistic", "sampleCount", "warmupExcluded"}) &&
+        evidence_record != nullptr &&
+        A2EvidenceRecordIsExact(
+            *evidence_record,
+            &evidence_id,
+            &evidence_class,
+            &evidence_readiness,
+            &evidence_hardware_available) &&
+        StringMember(*spec, "evidenceClass", &declared_evidence_class) &&
+        declared_evidence_class == evidence_class &&
+        StringMember(*spec, "readiness", &declared_readiness) &&
+        declared_readiness == evidence_readiness &&
+        StringMember(*spec, "evidenceRef", &validated->evidence_ref) &&
+        validated->evidence_ref == evidence_id &&
+        ((evidence_class == "USER_INPUT" &&
+          evidence_readiness == "FIELD_UNVERIFIED") ||
+         (evidence_class == "MEASURED" &&
+          evidence_readiness == "FIELD_VERIFIED"));
+    if (!exact_schema) {
+      Reject(
+          contract,
+          "RAW_OBSERVATION_SCHEMA_INVALID",
+          "The A2 RawObservation v0.2 schema is not exact.",
+          "Remove unknown fields and resolve every evidence reference.");
+      return false;
+    }
+    std::string group_id;
+    std::string membership_digest;
+    if (!StringMember(*group, "id", &group_id) || group_id.empty() ||
+        members == nullptr ||
+        !ParseExactRankMembers(
+            *members, profile.rank_count, &validated->group_members) ||
+        validated->group_members.size() != static_cast<size_t>(rank_count) ||
+        rank_count != model.config.rank_count ||
+        !StringMember(*group, "membershipDigest", &membership_digest) ||
+        membership_digest !=
+            A2MembershipDigest(
+                group_id, group_type, validated->group_members, topology_digest) ||
+        group_id != model.group_id ||
+        validated->group_members != model.group_members ||
+        membership_digest != model.group_membership_sha256) {
+      Reject(
+          contract,
+          "RAW_OBSERVATION_GROUP_INVALID",
+          "The A2 RawObservation group does not match the legal model subgroup.",
+          "Use the exact group id, rank count, membership, and membership digest.");
+      return false;
+    }
+    validated->group_id = group_id;
+    validated->group_membership_sha256 = membership_digest;
+    validated->hardware_available = evidence_hardware_available;
   }
 
   uint64_t startup_ns = model.config.startup_ns;
@@ -4712,10 +5263,21 @@ bool LoadAscendResources(
   contract->topology_digest = profile.topology_digest;
   contract->profile_evidence_level = profile.evidence_level;
   contract->profile_field_readiness = profile.field_readiness;
+  contract->profile_evidence_ref = profile.evidence_ref;
+  contract->ascend_profile_id = profile.id;
+  contract->profile_hardware_available = profile.hardware_available;
   contract->raw_observation_evidence_level = raw.evidence_level;
   contract->raw_observation_field_readiness = raw.field_readiness;
+  contract->raw_observation_evidence_ref = raw.evidence_ref;
+  contract->raw_observation_hardware_available = raw.hardware_available;
   contract->cost_model_evidence_level = model.evidence_level;
   contract->cost_model_field_readiness = model.field_readiness;
+  contract->cost_model_evidence_ref = model.evidence_ref;
+  contract->cost_model_hardware_available = model.hardware_available;
+  contract->hccl_group_id = model.group_id;
+  contract->hccl_group_members = model.group_members;
+  contract->hccl_group_membership_sha256 =
+      model.group_membership_sha256;
   contract->ascend_profiled = true;
   return true;
 }
@@ -5031,13 +5593,72 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
       return contract;
     }
     if (contract.a2_ground_truth_ready) {
+      if (contract.a2_bound_workload_sha256 != contract.workload_sha256) {
+        Reject(
+            &contract,
+            "A2_WORKLOAD_BINDING_MISMATCH",
+            "The A2 Run is bound to a different workload digest.",
+            "Select the exact frozen workload artifact.");
+        return contract;
+      }
+      if (contract.a2_bound_profile_id != contract.ascend_profile_id ||
+          contract.a2_bound_profile_sha256 != contract.device_profile_sha256 ||
+          contract.a2_bound_profile_evidence_level !=
+              contract.profile_evidence_level ||
+          contract.a2_bound_profile_field_readiness !=
+              contract.profile_field_readiness ||
+          contract.a2_bound_profile_evidence_ref !=
+              contract.profile_evidence_ref) {
+        Reject(
+            &contract,
+            "A2_PROFILE_BINDING_MISMATCH",
+            "The A2 Run Profile identity or evidence binding differs from the selected Profile.",
+            "Bind the exact Profile digest, evidence class, readiness, and evidenceRef.");
+        return contract;
+      }
+      if (contract.ascend_rank_count != 8 ||
+          contract.a2_bound_topology_sha256 != contract.topology_digest) {
+        Reject(
+            &contract,
+            "A2_TOPOLOGY_BINDING_MISMATCH",
+            "The selected Profile is not the frozen world-eight topology.",
+            "Use the frozen eight-rank mapping digest.");
+        return contract;
+      }
+      if (contract.a2_bound_group_id != contract.hccl_group_id ||
+          contract.a2_bound_group_type !=
+              AstraSim::CostedGroupTypeName(
+                  contract.hccl_cost_model.group_type) ||
+          contract.a2_bound_group_rank_count !=
+              contract.hccl_cost_model.rank_count ||
+          contract.a2_bound_group_members != contract.hccl_group_members ||
+          contract.a2_bound_group_membership_sha256 !=
+              contract.hccl_group_membership_sha256) {
+        Reject(
+            &contract,
+            "A2_HCCL_GROUP_BINDING_MISMATCH",
+            "The model/raw HCCL subgroup differs from the frozen Run membership.",
+            "Use one legal frozen TP, DP, or EP subgroup in Run, model, and raw data.");
+        return contract;
+      }
       contract.a2_calibration_eligible =
           contract.a2_calibration_eligible &&
+          contract.a2_bound_profile_evidence_level == "MEASURED" &&
+          contract.a2_bound_profile_field_readiness == "FIELD_VERIFIED" &&
           contract.profile_field_readiness == "FIELD_VERIFIED" &&
+          contract.profile_evidence_level == "MEASURED" &&
+          contract.profile_hardware_available &&
           contract.raw_observation_evidence_level == "MEASURED" &&
           contract.raw_observation_field_readiness == "FIELD_VERIFIED" &&
+          contract.raw_observation_hardware_available &&
           contract.cost_model_evidence_level == "DERIVED" &&
-          contract.cost_model_field_readiness == "FIELD_VERIFIED";
+          contract.cost_model_field_readiness == "FIELD_VERIFIED" &&
+          contract.cost_model_hardware_available &&
+          contract.a2_run_evidence_ref != "UNKNOWN" &&
+          contract.a2_result_evidence_ref != "UNKNOWN" &&
+          contract.profile_evidence_ref != "UNKNOWN" &&
+          contract.raw_observation_evidence_ref != "UNKNOWN" &&
+          contract.cost_model_evidence_ref != "UNKNOWN";
     }
     contract.accepted = true;
     contract.exit_code = 0;

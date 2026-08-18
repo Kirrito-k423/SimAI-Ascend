@@ -37,6 +37,18 @@ double SampleCv(const std::vector<uint64_t>& samples, size_t count) {
   return static_cast<double>(deviation / mean);
 }
 
+bool HbmLimitReached(uint64_t peak_hbm_B, uint64_t base_hbm_B) {
+  if (base_hbm_B == 0U) {
+    return true;
+  }
+  // ceil(base * 17 / 20), expressed without an overflowing multiplication.
+  const uint64_t quotient = base_hbm_B / 20U;
+  const uint64_t remainder = base_hbm_B % 20U;
+  const uint64_t threshold =
+      quotient * 17U + (remainder * 17U + 19U) / 20U;
+  return peak_hbm_B >= threshold;
+}
+
 uint64_t LinearType7P90(std::vector<uint64_t> sorted) {
   std::sort(sorted.begin(), sorted.end());
   const long double position =
@@ -83,9 +95,21 @@ A2GroundTruthScenarioValidation ValidateA2GroundTruthScenario(
         "Capture five complete pairs, extending the unchanged run to ten only when required.";
     return validation;
   }
+  for (const uint64_t sample : input.step_time_ns) {
+    if (sample == 0U) {
+      A2GroundTruthScenarioValidation validation;
+      validation.classification = A2GroundTruthValidationClass::InvalidInput;
+      validation.reject_code = "A2_GROUND_TRUTH_STEP_TIME_INVALID";
+      validation.message =
+          "A2 step-time samples must be positive integral nanoseconds.";
+      validation.remediation =
+          "Provide nonzero canonical uint64 nanosecond samples.";
+      return validation;
+    }
+  }
   const uint64_t maximum_hbm =
       *std::max_element(input.peak_hbm_B.begin(), input.peak_hbm_B.end());
-  if (maximum_hbm * 100U >= input.base_hbm_B * 85U) {
+  if (HbmLimitReached(maximum_hbm, input.base_hbm_B)) {
     return InvalidAccuracy("A2_HBM_LIMIT_REACHED");
   }
   if (input.completed_ranks != input.expected_ranks ||
@@ -107,6 +131,14 @@ A2GroundTruthScenarioValidation ValidateA2GroundTruthScenario(
     return InvalidAccuracy("A2_PROVENANCE_DRIFT");
   }
   const double initial_cv = SampleCv(input.step_time_ns, 5U);
+  if (!std::isfinite(initial_cv)) {
+    A2GroundTruthScenarioValidation validation;
+    validation.classification = A2GroundTruthValidationClass::InvalidInput;
+    validation.reject_code = "A2_GROUND_TRUTH_STEP_TIME_INVALID";
+    validation.message = "The A2 step-time CV is not finite.";
+    validation.remediation = "Provide finite positive uint64 samples.";
+    return validation;
+  }
   const bool high_variation = initial_cv > 0.1;
   if ((!high_variation && input.step_time_ns.size() != 5U) ||
       (high_variation && input.step_time_ns.size() != 10U)) {
@@ -126,8 +158,14 @@ A2GroundTruthScenarioValidation ValidateA2GroundTruthScenario(
   validation.summary.id = input.id;
   validation.summary.sample_count =
       static_cast<int>(input.step_time_ns.size());
-  validation.summary.cv =
-      SampleCv(input.step_time_ns, input.step_time_ns.size());
+  validation.summary.cv = SampleCv(input.step_time_ns, input.step_time_ns.size());
+  if (!std::isfinite(validation.summary.cv)) {
+    validation.classification = A2GroundTruthValidationClass::InvalidInput;
+    validation.reject_code = "A2_GROUND_TRUTH_STEP_TIME_INVALID";
+    validation.message = "The complete A2 step-time CV is not finite.";
+    validation.remediation = "Provide finite positive uint64 samples.";
+    return validation;
+  }
   validation.summary.median_step_time_ns = MedianOfSorted(sorted);
   validation.summary.minimum_step_time_ns = sorted.front();
   validation.summary.maximum_step_time_ns = sorted.back();

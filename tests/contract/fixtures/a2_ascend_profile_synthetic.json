@@ -1,0 +1,105 @@
+{
+  "apiVersion": "simai.ascend.profile/v1alpha1",
+  "kind": "AscendHardwareProfile",
+  "schemaSemver": "0.1.0",
+  "metadata": {
+    "id": "test-only-a2-world8-profile"
+  },
+  "spec": {
+    "status": "READY_FOR_ANALYTICAL",
+    "identity": {
+      "vendor": "HUAWEI_ASCEND",
+      "generation": "A2",
+      "physicalChipCount": {
+        "status": "KNOWN",
+        "value": 8,
+        "unit": "count",
+        "evidenceRef": "a2-profile-input",
+        "readiness": "FIELD_UNVERIFIED"
+      },
+      "managementDeviceCount": {
+        "status": "KNOWN",
+        "value": 8,
+        "unit": "count",
+        "evidenceRef": "a2-profile-input",
+        "readiness": "FIELD_UNVERIFIED"
+      }
+    },
+    "rankGranularity": {
+      "trainingRankUnit": "CHIP",
+      "trainingRanksPerUnit": {
+        "status": "KNOWN",
+        "value": 1,
+        "unit": "count",
+        "evidenceRef": "a2-profile-input",
+        "readiness": "FIELD_UNVERIFIED"
+      }
+    },
+    "compute": {
+      "capabilities": [
+        {
+          "opId": "GEMM",
+          "peakFLOPsPerS": {
+            "status": "KNOWN",
+            "value": 100000000000000,
+            "unit": "FLOP/s",
+            "evidenceRef": "a2-profile-input",
+            "readiness": "FIELD_UNVERIFIED"
+          }
+        }
+      ]
+    },
+    "memory": {
+      "hbm": {
+        "installedCapacity": {
+          "status": "KNOWN",
+          "value": 68719476736,
+          "unit": "B",
+          "scope": "PER_PHYSICAL_CHIP",
+          "evidenceRef": "a2-profile-input",
+          "readiness": "FIELD_UNVERIFIED"
+        },
+        "bandwidth": [
+          {
+            "direction": "READ_WRITE",
+            "status": "KNOWN",
+            "value": 1000000000000,
+            "unit": "B/s",
+            "evidenceRef": "a2-profile-input",
+            "readiness": "FIELD_UNVERIFIED"
+          }
+        ]
+      }
+    },
+    "topology": {
+      "levels": [
+        {
+          "scope": "WORLD",
+          "rankCount": 8,
+          "topologyDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "evidenceRef": "a2-profile-input",
+          "readiness": "FIELD_UNVERIFIED"
+        }
+      ]
+    },
+    "evidence": [
+      {
+        "id": "a2-profile-input",
+        "class": "USER_INPUT",
+        "source": {
+          "uri": "fixture://issue-21/a2-world8-profile",
+          "ref": "test-only-v2"
+        },
+        "method": {
+          "name": "contract-fixture",
+          "version": "2"
+        },
+        "asOf": "2026-08-18T00:00:00+08:00",
+        "conditions": {
+          "hardwareAvailable": false
+        },
+        "sanitization": "test-only-synthetic-no-host-data"
+      }
+    ]
+  }
+}

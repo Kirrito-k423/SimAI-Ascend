@@ -1,0 +1,84 @@
+{
+  "apiVersion": "simai.ascend.costmodel/v1alpha1",
+  "kind": "HcclCostModel",
+  "schemaSemver": "0.2.0",
+  "metadata": {
+    "id": "test-only-a2-ep4-alpha-beta"
+  },
+  "spec": {
+    "profileDigest": "sha256:ea5be8ae5b10058f23f5347ceb511d699b1f54b63133ea96e6a16ec41477291e",
+    "collective": "ALL_REDUCE",
+    "dtype": "BF16",
+    "reduction": "SUM",
+    "timingScope": "DEVICE_ONLY",
+    "groupDomain": {
+      "rankCounts": [4],
+      "groupTypes": ["EP"],
+      "scopes": ["EP_SUBGROUP"],
+      "topologyDigests": [
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "groupIds": ["a2-ep-stage-0"],
+      "memberRanks": [[0, 1, 2, 3]],
+      "membershipDigests": [
+        "sha256:048b1f57e1bfc4b045fa6ccae438292d18391e624178291c08a34b758ee84388"
+      ]
+    },
+    "messageDomainBytes": {
+      "min": 1048576,
+      "max": 1048576,
+      "unit": "B"
+    },
+    "inputSamples": [
+      {
+        "id": "test-only-a2-ep4-ar-1mib",
+        "path": "tests/contract/fixtures/a2_hccl_ep4_observation_synthetic.json",
+        "sha256": "sha256:925d27096d8d86c6f4d0fcac168acbbcbd4959c75ccd3415219faada7db34fa8"
+      }
+    ],
+    "fit": {
+      "family": "ALPHA_BETA",
+      "formula": "round(startup_ns + message_B / bandwidth_Bps * 1000000000)",
+      "startup": {
+        "value": 20000,
+        "unit": "ns"
+      },
+      "bandwidth": {
+        "value": 25000000000,
+        "unit": "B/s"
+      },
+      "interpolation": "NONE"
+    },
+    "traffic": {
+      "algorithm": "RING",
+      "semantics": "ALGORITHM_TOTAL_GROUP_BYTES"
+    },
+    "evidenceClass": "DERIVED",
+    "readiness": "FIELD_UNVERIFIED",
+    "evidenceRef": "a2-model-derivation",
+    "evidence": [
+      {
+        "id": "a2-model-derivation",
+        "class": "DERIVED",
+        "readiness": "FIELD_UNVERIFIED",
+        "source": {
+          "uri": "fixture://issue-21/a2-ep4-cost-model",
+          "ref": "test-only-v2"
+        },
+        "method": {
+          "name": "alpha-beta-contract-fit",
+          "version": "2"
+        },
+        "asOf": "2026-08-18T00:00:00+08:00",
+        "conditions": {
+          "hardwareAvailable": false
+        },
+        "sanitization": "test-only-synthetic-no-host-data"
+      }
+    ],
+    "extrapolation": {
+      "allowed": false,
+      "policy": "FAIL"
+    }
+  }
+}
