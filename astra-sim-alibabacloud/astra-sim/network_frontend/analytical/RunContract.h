@@ -8,6 +8,8 @@
 
 #include <string>
 
+#include "astra-sim/system/Common.hh"
+
 namespace SimAIContract {
 
 struct LegacyGpuRunConfig {
@@ -16,7 +18,7 @@ struct LegacyGpuRunConfig {
   int nics_per_server = 0;
   double nvlink_bandwidth_GBps = 0.0;
   double nic_bandwidth_GBps = 0.0;
-  std::string gpu_type;
+  GPUType gpu_type = GPUType::NONE;
 };
 
 struct AnalyticalRunContract {
@@ -41,6 +43,7 @@ struct AnalyticalRunContract {
   std::string binary_sha256 = "UNKNOWN";
   std::string device_profile_sha256 = "UNKNOWN";
   bool device_profile_present = false;
+  bool workload_digest_verified = false;
   LegacyGpuRunConfig legacy_gpu;
 };
 

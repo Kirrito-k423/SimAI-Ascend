@@ -18,14 +18,14 @@
 
 ### 2.1 逻辑视图
 
-`RunContract` 是 Analytical 前端边界上的深模块：它解析/校验 JSON、计算输入与二进制 SHA-256、形成稳定状态，并只把已校验的 legacy GPU 配置交给既有 `UserParam`。既有 `Sys`、`Workload`、`Layer`、`cal_busbw` 不知道 Run Manifest 的存在。
+`RunContract` 是 Analytical 前端边界上的深模块：它解析/校验 JSON、计算输入与当前进程真实可执行文件的 SHA-256、形成稳定状态，并只把已校验的 legacy GPU 配置交给既有 `UserParam`。可执行文件通过操作系统进程身份解析，PATH、相对路径或执行型包装器不会使摘要退化为 `UNKNOWN`。既有 `Sys`、`Workload`、`Layer`、`cal_busbw` 不知道 Run Manifest 的存在。
 
 Result Manifest 将证据与可执行就绪性分开：workload 可以是 `USER_PROVIDED` evidence，同时 Analytical backend 为 `READY`；尚未接入的 HBM、traffic、Fault Goodput 等结果保持字符串哨兵 `UNKNOWN`，不得用 0 或空对象冒充已计算结果。
 
 ### 2.2 开发视图
 
 - `AnalyticalAstra.cc`：选择 contract 模式或原 legacy CLI 模式，并调用真实 Analytical 生命周期。
-- `RunContract.h/.cc`：contract 模型、严格 JSON 读取、SHA-256、校验与脱敏 Result Manifest 序列化。
+- `RunContract.h/.cc`：contract 模型、严格 JSON 读取、真实可执行文件解析、SHA-256、校验与脱敏 Result Manifest 序列化；GPU 名称只在此处映射一次为 `GPUType`。
 - `tests/contract/test_analytical_run_contract.py`：只从真实进程边界观察退出状态与 Result Manifest；legacy CLI 回归只观察退出状态。
 - `tests/contract/fixtures/`：公开、合成、单层最小 workload 及正/负 Run Manifest。
 
@@ -42,7 +42,9 @@ flowchart TD
     E --> F{"schema/字段/artifact 合法?"}
     F -- "否" --> G["INVALID_INPUT + 稳定 reject_code"]
     G --> H["写脱敏 Result Manifest"]
-    H --> I["exit 2"]
+    H --> I{"写入成功?"}
+    I -- "是" --> I2["exit 2"]
+    I -- "否" --> I4["exit 4"]
     F -- "是" --> J{"device_profile 与 legacy_gpu 冲突?"}
     J -- "是" --> K["DEVICE_SELECTOR_CONFLICT"]
     K --> H
@@ -50,10 +52,12 @@ flowchart TD
     L --> D
     D --> M["AnaSim Run/Stop/Destroy"]
     M --> N["VALID Result Manifest"]
-    N --> O["exit 0"]
+    N --> P{"写入成功?"}
+    P -- "是" --> O["exit 0"]
+    P -- "否" --> I4
 ```
 
-contract 正例与冲突负例不会并行共享内部对象。相同 Run Manifest 会得到相同输入 digest；二进制变化会改变 `binary_sha256`。既有 CSV 仍由原流程产生，但它不是本票的验收 seam。
+contract 正例与冲突负例不会并行共享内部对象。相同 Run Manifest、workload 与二进制会得到逐字段相同的 Result Manifest；二进制变化会改变 `binary_sha256`。既有 CSV 仍由原流程产生，但它不是本票的验收 seam。
 
 ### 2.4 物理视图
 
@@ -67,6 +71,8 @@ contract 正例与冲突负例不会并行共享内部对象。相同 Run Manife
 2. 旧 CLI：没有 `--run-manifest`，直接调用原 parser，最小 workload 仍 exit 0。
 3. 设备选择冲突：同一 Run Manifest 同时含 `device_profile` 与 `legacy_gpu`，不启动 Analytical workload，exit 2，输出 `INVALID_INPUT/DEVICE_SELECTOR_CONFLICT`。
 4. 缺失定量能力：运行本身可合法完成，但 HBM、traffic、Useful Throughput、Top-5、代表配置与 Fault Goodput 仍输出 `UNKNOWN`。
+5. workload 摘要不匹配：不启动 Analytical workload，exit 2，输出 `INVALID_INPUT/WORKLOAD_DIGEST_MISMATCH`，并把 workload readiness 标为 `BLOCKED`。
+6. Result Manifest 目标不可写：无论输入原本将被接受还是拒绝，固定 exit 4，不用输入错误 exit 2 掩盖输出失败。
 
 ## 3. 类图与职责
 
@@ -84,12 +90,13 @@ classDiagram
       +run_manifest_sha256 string
       +workload_sha256 string
       +binary_sha256 string
+      +workload_digest_verified bool
       +legacy_gpu LegacyGpuRunConfig
     }
     class LegacyGpuRunConfig {
       +gpu_count int
       +gpus_per_server int
-      +gpu_type string
+      +gpu_type GPUType
       +nvlink_bandwidth_GBps double
       +nic_bandwidth_GBps double
       +nics_per_server int
@@ -148,7 +155,7 @@ SimAI_analytical \
 }
 ```
 
-相对 workload path 以进程工作目录为基准。入口计算 Run Manifest、workload 和当前真实二进制的 SHA-256；调用者不需要信任进程自己回显的 path。
+相对 workload path 以进程工作目录为基准。入口计算 Run Manifest、workload 和当前真实二进制的 SHA-256；调用者不需要信任进程自己回显的 path。macOS 使用当前进程的 `_NSGetExecutablePath`，Linux 使用 `/proc/self/exe`，并以 `argv[0]` 的相对/PATH 解析为可移植回退；所有候选都会规范化后再读取，因此摘要描述实际运行的二进制而不是调用字符串。
 
 ### 4.2 校验与状态
 
@@ -168,7 +175,7 @@ SimAI_analytical \
 - `DEVICE_SELECTOR_CONFLICT`
 - `LEGACY_GPU_CONFIG_INVALID`
 
-合法执行使用 `status=VALID`、`reject_code=NONE`、exit 0。输入拒绝使用 `status=INVALID_INPUT`、exit 2。Result Manifest 目标不可写时进程 exit 4，并只输出固定 stderr 提示，因为目标本身不可用于表达结构化失败。
+合法执行使用 `status=VALID`、`reject_code=NONE`、exit 0。输入拒绝使用 `status=INVALID_INPUT`、exit 2。任何 Result Manifest（包括输入拒绝结果）目标不可写时进程统一 exit 4，并只输出固定 stderr 提示，因为目标本身不可用于表达结构化失败。
 
 ### 4.3 输出与失败/UNKNOWN/BLOCKED 传播
 
@@ -185,6 +192,7 @@ SimAI_analytical \
 传播规则：
 
 - device selector 冲突立即 `INVALID_INPUT`，contract/backend readiness 为 `BLOCKED`，定量结果和 validity 为 `UNKNOWN`；
+- workload 内容摘要与声明不匹配时，workload readiness 为 `BLOCKED`；只有摘要实际验证成功才为 `READY`，摘要尚不可得才为 `UNKNOWN`；
 - 未消费的 Ascend Profile、HBM、traffic 与搜索/故障能力保持 `UNKNOWN`，绝不继承 legacy GPU 默认值；
 - workload evidence 可为 `USER_PROVIDED`，但这不会把尚未实现的定量输出提升为 `READY`；
 - Result Manifest 不复制路径、原始日志或输入中的任意自由文本；`run_id` 只允许受限 ASCII，错误消息为固定文本。
@@ -204,6 +212,7 @@ SimAI_analytical \
 - 遵循 [ADR 0001](../adr/0001-derive-from-upstream-simai-history.md)：只在 Upstream Analytical 入口增加 adapter，保留真实 `Sys`/`Workload`/`Layer` 和历史身份，不建立独立模拟器。
 - 遵循 [ADR 0005](../adr/0005-separate-analytical-cost-from-simulation-flow.md)：#16 不把 Ascend Profile 静默映射到 GPU/NCCL；冲突 fail closed；本票不提前实现 HCCL cost/flow provider。
 - 使用进程入口 adapter 而非修改共享 `AstraParamParse`：避免 Simulation/Physical backend 意外获得未实现的 contract 语义。
+- GPU 类型名称在 contract 校验中集中映射为 `GPUType`，主入口只消费已校验枚举；未知名称拒绝且不会再默认回退到 H20。
 - 使用内置、无外部依赖的严格 JSON reader 与 SHA-256：保持 Upstream 构建依赖不变。代价是 v1 parser 当前只需要覆盖 contract 所用 JSON 类型与转义集合，后续 schema 扩展应优先引入统一 schema 验证层。
 - 结果不解析既有 CSV 来猜测 timing 单位；在单位/语义未形成独立契约前诚实输出 `UNKNOWN`。
 
@@ -214,13 +223,13 @@ SimAI_analytical \
 | Issue #16 验收项 | 证据 |
 | --- | --- |
 | 1. 最小 Run Manifest 启动并输出 Result Manifest | `test_minimal_legacy_gpu_manifest_runs_real_analytical_process`：exit 0 + JSON parse |
-| 2. 版本/状态/拒绝码/摘要/provenance/evidence/readiness/UNKNOWN | 正例逐字段断言；摘要由 Python `hashlib` 独立计算；摘要漂移负例 fail closed |
+| 2. 版本/状态/拒绝码/摘要/provenance/evidence/readiness/UNKNOWN | 正例逐字段断言；摘要由 Python `hashlib` 独立计算；摘要漂移负例断言 `WORKLOAD_DIGEST_MISMATCH` 与 workload `BLOCKED` |
 | 3. 无 Ascend Profile 的 GPU workload 与旧 CLI | 正例选择 `LEGACY_CALBUSBW`；`test_minimal_gpu_workload_keeps_legacy_cli_compatible` exit 0 |
 | 4. Ascend 与 legacy GPU 冲突 fail closed | `test_conflicting_device_selectors_fail_closed`：exit 2 + `DEVICE_SELECTOR_CONFLICT` |
-| 5. 真实进程黑盒 seam | 测试只观察 subprocess return code 与 Result Manifest；旧 CLI 只观察 return code |
+| 5. 真实进程黑盒 seam | 测试只观察 subprocess return code 与 Result Manifest；PATH 与相对路径启动都独立校验真实二进制摘要；不可写负例只断言 exit 4；旧 CLI 只观察 return code |
 | 6. artifact 脱敏 | 正/负结果断言无仓库/fixture path 与 IPv4；fixture 全为合成公开值；提交前另跑敏感信息扫描 |
 
-Independent verification 应从干净构建产物运行上述正/负 fixture，并独立重算 Run/workload/binary SHA-256。
+Independent verification 应从干净构建产物运行上述正/负 fixture，并独立重算 Run/workload/binary SHA-256。`test_same_manifest_has_deterministic_result_fields` 通过真实进程对同一 manifest 连续运行两次，并逐字段比较两个 Result Manifest，落实父规格的确定性规则。
 
 ## 8. 限制与后续依赖
 

@@ -6,6 +6,7 @@
 #include "RunContract.h"
 
 #include <array>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -18,6 +19,12 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <unistd.h>
+
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
 namespace SimAIContract {
 namespace {
@@ -141,6 +148,70 @@ std::string FileSha256(const std::string& path) {
     return "UNKNOWN";
   }
   return "sha256:" + Sha256Hex(content);
+}
+
+std::string CanonicalPath(const std::string& path) {
+  if (path.empty()) {
+    return "";
+  }
+  std::array<char, PATH_MAX> resolved = {{'\0'}};
+  return realpath(path.c_str(), resolved.data()) == nullptr
+      ? ""
+      : std::string(resolved.data());
+}
+
+std::string ResolveExecutableFromArgument(const std::string& argument) {
+  if (argument.empty()) {
+    return "";
+  }
+  if (argument.find('/') != std::string::npos) {
+    return CanonicalPath(argument);
+  }
+  const char* path_environment = std::getenv("PATH");
+  if (path_environment == nullptr) {
+    return "";
+  }
+  std::istringstream paths(path_environment);
+  std::string directory;
+  while (std::getline(paths, directory, ':')) {
+    const std::string candidate =
+        (directory.empty() ? "." : directory) + "/" + argument;
+    if (access(candidate.c_str(), X_OK) == 0) {
+      const std::string resolved = CanonicalPath(candidate);
+      if (!resolved.empty()) {
+        return resolved;
+      }
+    }
+  }
+  return "";
+}
+
+std::string ResolveCurrentExecutable(const std::string& argument) {
+#if defined(__APPLE__)
+  std::vector<char> path(PATH_MAX);
+  uint32_t size = static_cast<uint32_t>(path.size());
+  if (_NSGetExecutablePath(path.data(), &size) != 0) {
+    path.resize(size);
+    if (_NSGetExecutablePath(path.data(), &size) != 0) {
+      return ResolveExecutableFromArgument(argument);
+    }
+  }
+  const std::string resolved = CanonicalPath(path.data());
+  return resolved.empty() ? ResolveExecutableFromArgument(argument) : resolved;
+#elif defined(__linux__)
+  std::array<char, PATH_MAX> path = {{'\0'}};
+  const ssize_t length = readlink("/proc/self/exe", path.data(), path.size() - 1U);
+  if (length > 0) {
+    path[static_cast<size_t>(length)] = '\0';
+    const std::string resolved = CanonicalPath(path.data());
+    if (!resolved.empty()) {
+      return resolved;
+    }
+  }
+  return ResolveExecutableFromArgument(argument);
+#else
+  return ResolveExecutableFromArgument(argument);
+#endif
 }
 
 class JsonValue {
@@ -470,9 +541,22 @@ bool IsSafeRunId(const std::string& run_id) {
   return true;
 }
 
-bool IsSupportedGpuType(const std::string& gpu_type) {
-  return gpu_type == "A100" || gpu_type == "A800" || gpu_type == "H100" ||
-         gpu_type == "H800" || gpu_type == "H20";
+bool ParseGpuType(const std::string& name, GPUType* gpu_type) {
+  if (name == "A100") {
+    *gpu_type = GPUType::A100;
+  } else if (name == "A800") {
+    *gpu_type = GPUType::A800;
+  } else if (name == "H100") {
+    *gpu_type = GPUType::H100;
+  } else if (name == "H800") {
+    *gpu_type = GPUType::H800;
+  } else if (name == "H20") {
+    *gpu_type = GPUType::H20;
+  } else {
+    *gpu_type = GPUType::NONE;
+    return false;
+  }
+  return true;
 }
 
 bool IsSha256Identifier(const std::string& digest) {
@@ -547,7 +631,7 @@ std::string Quote(const std::string& value) {
 
 AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
   AnalyticalRunContract contract;
-  contract.binary_path = argc > 0 ? argv[0] : "";
+  contract.binary_path = ResolveCurrentExecutable(argc > 0 ? argv[0] : "");
 
   bool contract_requested = false;
   for (int index = 1; index < argc; ++index) {
@@ -692,6 +776,7 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
         "Use the intended immutable workload or update its declared digest.");
     return contract;
   }
+  contract.workload_digest_verified = true;
 
   const JsonValue* device_profile = Member(root, "device_profile");
   const JsonValue* legacy_gpu = Member(root, "legacy_gpu");
@@ -714,6 +799,7 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
   }
   double nvlink_bandwidth = 0.0;
   double nic_bandwidth = 0.0;
+  std::string declared_gpu_type;
   if (legacy_gpu == nullptr || legacy_gpu->type != JsonValue::Type::Object ||
       !PositiveIntMember(
           *legacy_gpu, "gpu_count", &contract.legacy_gpu.gpu_count) ||
@@ -725,11 +811,11 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
           *legacy_gpu,
           "nics_per_server",
           &contract.legacy_gpu.nics_per_server) ||
-      !StringMember(*legacy_gpu, "gpu_type", &contract.legacy_gpu.gpu_type) ||
+      !StringMember(*legacy_gpu, "gpu_type", &declared_gpu_type) ||
       !NumberMember(*legacy_gpu, "nvlink_bandwidth_GBps", &nvlink_bandwidth) ||
       !NumberMember(*legacy_gpu, "nic_bandwidth_GBps", &nic_bandwidth) ||
       nvlink_bandwidth <= 0.0 || nic_bandwidth <= 0.0 ||
-      !IsSupportedGpuType(contract.legacy_gpu.gpu_type) ||
+      !ParseGpuType(declared_gpu_type, &contract.legacy_gpu.gpu_type) ||
       contract.legacy_gpu.gpu_count % contract.legacy_gpu.gpus_per_server != 0) {
     Reject(
         &contract,
@@ -773,6 +859,9 @@ bool WriteAnalyticalResultManifest(
       contract.legacy_gpu.gpu_count > 0 ? "LEGACY_GPU" : "UNKNOWN";
   const std::string cost_model =
       valid && !contract.device_profile_present ? "LEGACY_CALBUSBW" : "UNKNOWN";
+  const std::string workload_readiness = contract.workload_digest_verified
+      ? "READY"
+      : (contract.workload_sha256 == "UNKNOWN" ? "UNKNOWN" : "BLOCKED");
 
   output << "{\n"
          << "  \"schema_version\": " << Quote(kResultSchemaVersion) << ",\n"
@@ -822,9 +911,7 @@ bool WriteAnalyticalResultManifest(
          << "  },\n"
          << "  \"readiness\": {\n"
          << "    \"contract\": " << Quote(valid ? "READY" : "BLOCKED") << ",\n"
-         << "    \"workload\": "
-         << Quote(contract.workload_sha256 == "UNKNOWN" ? "UNKNOWN" : "READY")
-         << ",\n"
+         << "    \"workload\": " << Quote(workload_readiness) << ",\n"
          << "    \"analytical_backend\": "
          << Quote(valid ? "READY" : "BLOCKED") << ",\n"
          << "    \"ascend_profile\": "

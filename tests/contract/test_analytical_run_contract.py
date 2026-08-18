@@ -179,7 +179,101 @@ class AnalyticalRunContractTest(unittest.TestCase):
         self.assertEqual(result["status"], "INVALID_INPUT")
         self.assertEqual(result["reject_code"], "WORKLOAD_DIGEST_MISMATCH")
         self.assertEqual(result["readiness"]["contract"], "BLOCKED")
+        self.assertEqual(result["readiness"]["workload"], "BLOCKED")
         self.assertEqual(result["results"]["validity"], "UNKNOWN")
+
+    def test_rejected_run_returns_output_error_when_result_target_is_unwritable(self):
+        with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:
+            result_target = Path(temp_dir) / "result-is-a-directory"
+            result_target.mkdir()
+            completed = subprocess.run(
+                [
+                    str(self.binary),
+                    "--run-manifest",
+                    str(FIXTURES / "conflicting_device_run.json"),
+                    "--result-manifest",
+                    str(result_target),
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 4)
+
+    def test_path_launch_hashes_the_resolved_analytical_binary(self):
+        environment = os.environ.copy()
+        environment["PATH"] = os.pathsep.join(
+            [str(self.binary.parent), environment.get("PATH", "")]
+        )
+        with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:
+            result_path = Path(temp_dir) / "result.json"
+            completed = subprocess.run(
+                [
+                    self.binary.name,
+                    "--run-manifest",
+                    str(FIXTURES / "minimal_legacy_gpu_run.json"),
+                    "--result-manifest",
+                    str(result_path),
+                ],
+                cwd=REPO_ROOT,
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+            result = json.loads(result_path.read_text())
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(
+            result["provenance"]["binary_sha256"],
+            "sha256:" + hashlib.sha256(self.binary.read_bytes()).hexdigest(),
+        )
+
+    def test_relative_launch_hashes_the_resolved_analytical_binary(self):
+        relative_binary = self.binary.relative_to(REPO_ROOT)
+        with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:
+            result_path = Path(temp_dir) / "result.json"
+            completed = subprocess.run(
+                [
+                    str(relative_binary),
+                    "--run-manifest",
+                    str(FIXTURES / "minimal_legacy_gpu_run.json"),
+                    "--result-manifest",
+                    str(result_path),
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+            result = json.loads(result_path.read_text())
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(
+            result["provenance"]["binary_sha256"],
+            "sha256:" + hashlib.sha256(self.binary.read_bytes()).hexdigest(),
+        )
+
+    def test_same_manifest_has_deterministic_result_fields(self):
+        first_completed, first_result, _ = self.run_contract(
+            "minimal_legacy_gpu_run.json"
+        )
+        second_completed, second_result, _ = self.run_contract(
+            "minimal_legacy_gpu_run.json"
+        )
+
+        self.assertEqual(
+            (first_completed.returncode, second_completed.returncode), (0, 0)
+        )
+        self.assertEqual(first_result, second_result)
 
 
 if __name__ == "__main__":

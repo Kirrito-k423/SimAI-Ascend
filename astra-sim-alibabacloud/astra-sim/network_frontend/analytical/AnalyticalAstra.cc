@@ -73,6 +73,7 @@ int main(int argc,char *argv[]) {
   if (run_contract.enabled && !run_contract.accepted) {
     if (!SimAIContract::WriteAnalyticalResultManifest(run_contract, false)) {
       std::cerr << "Unable to write Result Manifest." << std::endl;
+      return 4;
     }
     return run_contract.exit_code;
   }
@@ -90,17 +91,7 @@ int main(int argc,char *argv[]) {
         run_contract.legacy_gpu.nvlink_bandwidth_GBps;
     param->net_work_param.bw_per_nic =
         run_contract.legacy_gpu.nic_bandwidth_GBps;
-    if (run_contract.legacy_gpu.gpu_type == "A100") {
-      param->net_work_param.gpu_type = GPUType::A100;
-    } else if (run_contract.legacy_gpu.gpu_type == "A800") {
-      param->net_work_param.gpu_type = GPUType::A800;
-    } else if (run_contract.legacy_gpu.gpu_type == "H100") {
-      param->net_work_param.gpu_type = GPUType::H100;
-    } else if (run_contract.legacy_gpu.gpu_type == "H800") {
-      param->net_work_param.gpu_type = GPUType::H800;
-    } else {
-      param->net_work_param.gpu_type = GPUType::H20;
-    }
+    param->net_work_param.gpu_type = run_contract.legacy_gpu.gpu_type;
     param->net_work_param.nvswitch_num =
         run_contract.legacy_gpu.gpu_count /
         run_contract.legacy_gpu.gpus_per_server;
