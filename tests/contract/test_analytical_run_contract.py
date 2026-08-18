@@ -3380,6 +3380,30 @@ class AnalyticalRunContractTest(unittest.TestCase):
             "FIELD_UNVERIFIED",
         )
 
+    def test_projected_a2a_is_unknown_when_second_hccl_request_invalidates_run(self):
+        routing = self.projected_routing(
+            {"kind": "UNIFORM", "messageBytesPerRank": 400}
+        )
+        completed, result = self.run_generated_hccl_contract(
+            collective="ALL_TO_ALL",
+            workload_token="ALLTOALL",
+            payload_semantics="HCCL_ALLTOALL_TOTAL_SEND_BYTES",
+            reduction="NONE",
+            traffic_algorithm="UNIFORM_DIRECT_EXCHANGE",
+            message_bytes=400,
+            projected_routing=routing,
+            layer_count=2,
+        )
+
+        self.assertEqual(completed.returncode, 3, completed.stderr)
+        self.assertEqual(result["status"], "UNSUPPORTED")
+        self.assertEqual(
+            result["reject_code"], "HCCL_MULTIPLE_REQUESTS_UNSUPPORTED"
+        )
+        self.assertEqual(result["readiness"]["contract"], "BLOCKED")
+        self.assertEqual(result["readiness"]["projected_a2a"], "BLOCKED")
+        self.assertEqual(result["results"]["projected_a2a_traffic"], "UNKNOWN")
+
     def test_projected_locality_dense_a2av_matches_enumerated_ground_truth(self):
         counts = [
             [0, 80, 10, 10],

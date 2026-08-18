@@ -5704,8 +5704,9 @@ std::string Quote(const std::string& value) {
 void WriteProjectedA2AResult(
     std::ostream& output,
     const AnalyticalRunContract& contract,
+    bool run_valid,
     const ProjectedA2ASummary& summary) {
-  if (!contract.hccl_cost_model.projected_a2a.present ||
+  if (!run_valid || !contract.hccl_cost_model.projected_a2a.present ||
       !summary.consumed_by_analytical || !summary.ready) {
     output << "\"UNKNOWN\"";
     return;
@@ -6688,7 +6689,7 @@ bool WriteAnalyticalResultManifest(
     output << "\"UNKNOWN\",\n";
   }
   output << "    \"projected_a2a_traffic\": ";
-  WriteProjectedA2AResult(output, contract, projected_summary);
+  WriteProjectedA2AResult(output, contract, valid, projected_summary);
   output << ",\n";
   output << "    \"target_workload\": ";
   if (contract.target_model_ready) {
