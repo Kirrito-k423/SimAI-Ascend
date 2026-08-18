@@ -10,10 +10,10 @@
 | AC-21 | Issue #21 合入 main、验收、评论、关闭 | BLOCKED_ENV | 本地合同 `origin/main@1fbfa8f`；评论 `issuecomment-5329707796`；Issue OPEN，等待 A2 runtime/ABI | 2026-08-18T22:36:46+08:00 |
 | AC-22 | Issue #22 合入 main、验收、评论、关闭 | NOT_STARTED | blocked by OPEN/BLOCKED_ENV #21 | 2026-08-18T22:36:46+08:00 |
 | AC-23 | Issue #23 合入 main、验收、评论、关闭 | NOT_STARTED | #19 CLOSED；仍 blocked by #22 | 2026-08-18T19:52:57+08:00 |
-| AC-24 | Issue #24 合入 main、验收、评论、关闭 | IN_PROGRESS | #19/#20 CLOSED；当前主攻 frontier | 2026-08-19T00:06:48+08:00 |
-| AC-25 | Issue #25 合入 main、验收、评论、关闭 | NOT_STARTED | blocked by #23,#24 | 2026-08-18T11:43:16+08:00 |
+| AC-24 | Issue #24 合入 main、验收、评论、关闭 | PASS | `origin/main@85f1bd6`；评论 `issuecomment-5332316044`；CLOSED | 2026-08-19T02:22:17+08:00 |
+| AC-25 | Issue #25 合入 main、验收、评论、关闭 | NOT_STARTED | #24 CLOSED；仍 blocked by #23 | 2026-08-19T02:23:28+08:00 |
 | AC-26 | Issue #26 合入 main、验收、评论、关闭 | NOT_STARTED | blocked by #25 | 2026-08-18T11:43:16+08:00 |
 | AC-27 | Issue #27 合入 main、验收、评论、关闭 | NOT_STARTED | blocked by #25 | 2026-08-18T11:43:16+08:00 |
-| AC-28 | Issue #28 合入 main、验收、评论、关闭 | NOT_STARTED | #17 CLOSED；frontier，因关键路径暂缓 | 2026-08-18T19:52:57+08:00 |
-| AC-29 | Issue #29 合入 main、验收、评论、关闭 | NOT_STARTED | #18/#19/#20 CLOSED；仍 blocked by #22,#24,#28 | 2026-08-19T00:06:48+08:00 |
+| AC-28 | Issue #28 合入 main、验收、评论、关闭 | IN_PROGRESS | #17 CLOSED；当前唯一可执行 CPU frontier | 2026-08-19T02:23:28+08:00 |
+| AC-29 | Issue #29 合入 main、验收、评论、关闭 | NOT_STARTED | #18/#19/#20/#24 CLOSED；仍 blocked by #22,#28 | 2026-08-19T02:23:28+08:00 |
 | AC-30 | Issue #30 合入 main、验收、评论、关闭 | NOT_STARTED | blocked by #26,#27,#29 | 2026-08-18T11:43:16+08:00 |
