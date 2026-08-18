@@ -183,7 +183,11 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 },
                 "payload": {
                     "bytesPerRank": {
-                        "semantics": payload_semantics,
+                        "semantics": (
+                            "API_INPUT_BYTES"
+                            if collective == "ALL_REDUCE"
+                            else payload_semantics
+                        ),
                         "uniformValue": message_bytes,
                         "unit": "B",
                     },
@@ -815,6 +819,115 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 )
                 observed.append(result["results"]["timing_ns"])
         self.assertEqual(observed, sorted(observed))
+
+    def test_all_collectives_share_fixed_profile_message_matrix(self):
+        cases = [
+            (
+                "ALL_REDUCE",
+                "ALLREDUCE",
+                "HCCL_ALLREDUCE_IN_PLACE_BUFFER_BYTES",
+                "SUM",
+                "RING",
+                6,
+                lambda size: size,
+            ),
+            (
+                "ALL_GATHER",
+                "ALLGATHER",
+                "HCCL_ALLGATHER_SEND_BYTES",
+                "NONE",
+                "RING_ALL_GATHER",
+                12,
+                lambda size: 4 * size,
+            ),
+            (
+                "REDUCE_SCATTER",
+                "REDUCESCATTER",
+                "HCCL_REDUCESCATTER_INPUT_BYTES",
+                "SUM",
+                "RING_REDUCE_SCATTER",
+                3,
+                lambda size: size // 4,
+            ),
+            (
+                "ALL_TO_ALL",
+                "ALLTOALL",
+                "HCCL_ALLTOALL_TOTAL_SEND_BYTES",
+                "NONE",
+                "UNIFORM_DIRECT_EXCHANGE",
+                3,
+                lambda size: size,
+            ),
+            (
+                "ALL_TO_ALL_V",
+                "ALLTOALLV",
+                "HCCL_ALLTOALLV_COUNTS_MATRIX",
+                "NONE",
+                "VARIABLE_DIRECT_EXCHANGE",
+                4,
+                lambda size: size,
+            ),
+        ]
+        for (
+            collective,
+            workload_token,
+            payload_semantics,
+            reduction,
+            traffic_algorithm,
+            traffic_multiplier,
+            expected_output,
+        ) in cases:
+            durations = []
+            for message_bytes in (4096, 1048576):
+                routing_matrix = None
+                if collective == "ALL_TO_ALL_V":
+                    routing_matrix = [
+                        [0, message_bytes, 0, 0],
+                        [0, 0, message_bytes, 0],
+                        [0, 0, 0, message_bytes],
+                        [message_bytes, 0, 0, 0],
+                    ]
+                with self.subTest(
+                    collective=collective, message_bytes=message_bytes
+                ):
+                    completed, result = self.run_generated_hccl_contract(
+                        collective=collective,
+                        workload_token=workload_token,
+                        payload_semantics=payload_semantics,
+                        reduction=reduction,
+                        traffic_algorithm=traffic_algorithm,
+                        message_bytes=message_bytes,
+                        routing_matrix=routing_matrix,
+                    )
+                    self.assertEqual(completed.returncode, 0)
+                    self.assertEqual(result["status"], "VALID")
+                    self.assertEqual(
+                        result["results"]["collective"]["operation"],
+                        collective,
+                    )
+                    self.assertEqual(
+                        result["results"]["collective_payload"]["semantics"],
+                        payload_semantics,
+                    )
+                    self.assertEqual(
+                        result["results"]["collective_payload"][
+                            "output_B_per_rank"
+                        ],
+                        expected_output(message_bytes),
+                    )
+                    self.assertEqual(
+                        result["results"]["traffic_B"],
+                        traffic_multiplier * message_bytes,
+                    )
+                    self.assertEqual(
+                        result["results"]["timing_ns"],
+                        round(
+                            20000
+                            + message_bytes / 25000000000 * 1000000000
+                        ),
+                    )
+                    durations.append(result["results"]["timing_ns"])
+            self.assertEqual(durations, sorted(durations))
 
     def test_explicit_legacy_busbw_adapter_converts_to_canonical_algbw(self):
         completed, result = self.run_mutated_ascend_contract(
