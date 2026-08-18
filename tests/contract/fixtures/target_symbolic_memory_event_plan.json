@@ -6,9 +6,9 @@
     "id": "target-symbolic-training-memory"
   },
   "spec": {
-    "modelDigest": "sha256:fe2a04a41c37db98e024f21ae03f5332869c746a96121c54526cf7e5fe4d19ab",
-    "stepDigest": "sha256:b802b140cbade19703be44fa7805dabc01bc6225b3b3a4597cc2864db5c56667",
-    "routingDigest": "sha256:a10a53a08506fad0e2473ef800e4af480262812d8fcb55d61a226c7c86087163",
+    "modelDigest": "sha256:10e215e11db9842d01b77ba2d12c2e82ea10572b6cbf9e5e3a3533f89756b1a3",
+    "stepDigest": "sha256:381474ff712f0e22900be6d2fd4d5d4003ccff98c23b5eaa4b110774c3d69ed2",
+    "routingDigest": "sha256:a647fd6d5b1eb982fdefb4b5c560b2890ee6cf808b1e7432b688ad066e3fefca",
     "unit": "B",
     "aggregation": "CONSERVATIVE_COMPONENT_PEAK_SUM",
     "bindings": {
@@ -24,49 +24,72 @@
         "allocateAt": "JOB_INIT",
         "releaseAt": "JOB_END",
         "expression": "logical trainable tensors * training parameter precision / parameter shards",
-        "requires": ["precision", "placement"]
+        "requires": [
+          "precision",
+          "placement"
+        ]
       },
       {
         "category": "GRADIENTS",
         "allocateAt": "BACKWARD_START_OR_PREALLOC",
         "releaseAt": "OPTIMIZER_STEP_END",
         "expression": "logical trainable tensors * gradient precision / gradient shards",
-        "requires": ["precision", "placement"]
+        "requires": [
+          "precision",
+          "placement"
+        ]
       },
       {
         "category": "OPTIMIZER_STATES",
         "allocateAt": "OPTIMIZER_INIT",
         "releaseAt": "JOB_END",
         "expression": "optimizer state tensors and optional master weights / optimizer shards",
-        "requires": ["optimizer", "placement"]
+        "requires": [
+          "optimizer",
+          "placement"
+        ]
       },
       {
         "category": "ACTIVATIONS",
         "allocateAt": "FORWARD_TENSOR_PRODUCED",
         "releaseAt": "BACKWARD_TENSOR_CONSUMED",
         "expression": "saved activation shape trace after recomputation selection",
-        "requires": ["precision", "placement", "recomputation"]
+        "requires": [
+          "precision",
+          "placement",
+          "recomputation"
+        ]
       },
       {
         "category": "COMMUNICATION_BUFFERS",
         "allocateAt": "COLLECTIVE_START",
         "releaseAt": "COLLECTIVE_END",
         "expression": "dispatch combine collective and runtime scratch buffers",
-        "requires": ["precision", "placement", "runtime"]
+        "requires": [
+          "precision",
+          "placement",
+          "runtime"
+        ]
       },
       {
         "category": "EXPERT_PLACEMENT",
         "allocateAt": "EXPERT_DISPATCH_START",
         "releaseAt": "EXPERT_COMBINE_END",
         "expression": "local routed expert weights and maximum local expert load",
-        "requires": ["placement", "precision"]
+        "requires": [
+          "placement",
+          "precision"
+        ]
       },
       {
         "category": "RECOMPUTATION",
         "allocateAt": "BACKWARD_RECOMPUTE_START",
         "releaseAt": "BACKWARD_RECOMPUTE_END",
         "expression": "recomputed activation and observed kernel workspace",
-        "requires": ["recomputation", "runtime"]
+        "requires": [
+          "recomputation",
+          "runtime"
+        ]
       }
     ],
     "capacity": {
@@ -76,6 +99,7 @@
       "plannedPeakHbmB": "UNKNOWN",
       "observedExecutionPeakHbmB": "UNKNOWN"
     },
+    "evidenceRef": "symbolic-memory-plan-input",
     "evidenceClass": "USER_INPUT",
     "readiness": "FIELD_UNVERIFIED",
     "evidence": [

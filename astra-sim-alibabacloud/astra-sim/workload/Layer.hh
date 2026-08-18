@@ -56,6 +56,7 @@ class Layer : public Callable, public StreamStat {
   bool needs_fwd_in_bckwd_initiation;
   bool is_checkpoint;
   ParallelismPolicy specific_parallellism;
+  TargetWorkloadEventBinding target_workload_binding;
 
   int lookup_table_size;
   int collective_counter;
@@ -107,7 +108,8 @@ class Layer : public Callable, public StreamStat {
       uint64_t weight_grad_comm_size,
       std::vector<bool> weight_grad_comm_involved_dimensions,
       Tick weight_grad_update_time,
-      ParallelismPolicy specific_policy);
+      ParallelismPolicy specific_policy,
+      const TargetWorkloadEventBinding& target_binding);
   void call(EventType event, CallData* mdata);
   Tick get_fwd_pass_compute();
   Tick get_input_grad_compute();

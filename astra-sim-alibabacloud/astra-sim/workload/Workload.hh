@@ -18,6 +18,7 @@ LICENSE file in the root directory of this source tree.
 #include <map>
 #include <tuple>
 #include "astra-sim/system/Callable.hh"
+#include "astra-sim/workload/WorkloadCollectiveDecoder.hh"
 
 namespace AstraSim {
 class Workload;
@@ -120,6 +121,7 @@ class Workload : Callable {
   int stat_row;
   int total_rows;
   bool registered_for_finished_streams;
+  TargetWorkloadEventBinding target_workload_binding;
 };
 } // namespace AstraSim
 #endif

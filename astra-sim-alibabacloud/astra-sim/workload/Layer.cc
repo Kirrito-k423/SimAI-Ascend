@@ -43,7 +43,8 @@ Layer::Layer(
     uint64_t weight_grad_comm_size,
     std::vector<bool> weight_grad_comm_involved_dimensions,
     Tick weight_grad_update_time,
-    ParallelismPolicy specific_policy) {
+    ParallelismPolicy specific_policy,
+    const TargetWorkloadEventBinding& target_binding) {
   this->id = id;
   this->layer_num = layer_num;
   this->generator = generator;
@@ -86,6 +87,7 @@ Layer::Layer(
   this->needs_fwd_in_bckwd_initiation = false;
   this->is_checkpoint = false;
   this->specific_parallellism = specific_policy;
+  this->target_workload_binding = target_binding;
   assert(generator != NULL);
 }
 

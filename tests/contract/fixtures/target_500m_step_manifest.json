@@ -6,7 +6,7 @@
     "id": "target-500m-global-token-step"
   },
   "spec": {
-    "modelDigest": "sha256:fe2a04a41c37db98e024f21ae03f5332869c746a96121c54526cf7e5fe4d19ab",
+    "modelDigest": "sha256:10e215e11db9842d01b77ba2d12c2e82ea10572b6cbf9e5e3a3533f89756b1a3",
     "sequenceTokens": 15625,
     "microBatchSequences": 1,
     "dataParallelReplicas": 32,
@@ -16,6 +16,7 @@
     "formula": "sequenceTokens * microBatchSequences * dataParallelReplicas * gradientAccumulation",
     "configuredRoutedAssignmentSlotsUpperBound": 496000000000,
     "routedLayersInScope": 62,
+    "evidenceRef": "fixed-step-input",
     "evidenceClass": "USER_INPUT",
     "readiness": "FIELD_UNVERIFIED",
     "evidence": [

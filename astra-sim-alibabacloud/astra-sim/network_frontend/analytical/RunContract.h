@@ -115,6 +115,9 @@ struct AnalyticalRunContract {
   std::string target_memory_search_gate = "UNKNOWN";
   std::string target_memory_execution_gate = "UNKNOWN";
   uint64_t target_logical_trainable_parameters = 0;
+  uint64_t target_checkpoint_auxiliary_elements = 0;
+  uint64_t target_checkpoint_quant_scale_elements = 0;
+  uint64_t target_checkpoint_routing_table_elements = 0;
   uint64_t target_checkpoint_storage_bytes = 0;
   uint64_t target_active_main_blocks_parameters = 0;
   uint64_t target_active_main_forward_parameters = 0;

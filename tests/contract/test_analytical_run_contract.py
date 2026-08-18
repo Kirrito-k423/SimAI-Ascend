@@ -14,6 +14,12 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 SHA256_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
+TARGET_RESOURCE_MAX_BYTES = {
+    "model": 256 * 1024,
+    "step": 64 * 1024,
+    "routing": 64 * 1024,
+    "memory_event_plan": 128 * 1024,
+}
 
 
 class AnalyticalRunContractTest(unittest.TestCase):
@@ -152,6 +158,11 @@ class AnalyticalRunContractTest(unittest.TestCase):
         mutate_routing=None,
         mutate_memory=None,
         mutate_manifest=None,
+        mutate_workload=None,
+        workload_layer_count=1,
+        artifact_sizes=None,
+        raw_replacements=None,
+        stdin_resource=None,
     ):
         """Rebind all Target Workload digests, then run the real process."""
         model = json.loads(
@@ -174,31 +185,56 @@ class AnalyticalRunContractTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="simai-target-contract-") as temp_dir:
             run_directory = self.prepare_run_directory(temp_dir)
+            artifact_sizes = artifact_sizes or {}
+            raw_replacements = raw_replacements or {}
+            artifact_contents = {}
 
-            def write_artifact(name, document):
+            def write_artifact(resource_name, name, document):
                 path = run_directory / name
-                path.write_text(json.dumps(document, indent=2) + "\n")
+                content = json.dumps(document, indent=2) + "\n"
+                for original, replacement in raw_replacements.get(
+                    resource_name, ()
+                ):
+                    if content.count(original) != 1:
+                        raise AssertionError(
+                            f"expected one {resource_name} raw token {original!r}"
+                        )
+                    content = content.replace(original, replacement, 1)
+                requested_size = artifact_sizes.get(resource_name)
+                if requested_size is not None:
+                    padding = requested_size - len(content.encode())
+                    if padding < 0:
+                        raise AssertionError(
+                            f"{resource_name} fixture exceeds requested size"
+                        )
+                    content = " " * padding + content
+                path.write_text(content)
+                artifact_contents[resource_name] = content
                 digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
                 return path, digest
 
-            model_path, model_digest = write_artifact("model.json", model)
+            model_path, model_digest = write_artifact("model", "model.json", model)
             step["spec"]["modelDigest"] = model_digest
             if mutate_step is not None:
                 mutate_step(step)
-            step_path, step_digest = write_artifact("step.json", step)
+            step_path, step_digest = write_artifact("step", "step.json", step)
 
             routing["spec"]["modelDigest"] = model_digest
             routing["spec"]["stepDigest"] = step_digest
             if mutate_routing is not None:
                 mutate_routing(routing)
-            routing_path, routing_digest = write_artifact("routing.json", routing)
+            routing_path, routing_digest = write_artifact(
+                "routing", "routing.json", routing
+            )
 
             memory["spec"]["modelDigest"] = model_digest
             memory["spec"]["stepDigest"] = step_digest
             memory["spec"]["routingDigest"] = routing_digest
             if mutate_memory is not None:
                 mutate_memory(memory)
-            memory_path, memory_digest = write_artifact("memory.json", memory)
+            memory_path, memory_digest = write_artifact(
+                "memory_event_plan", "memory.json", memory
+            )
 
             resource_digests = (
                 model_digest,
@@ -217,13 +253,55 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 ("routing", routing_path, routing_digest),
                 ("memory_event_plan", memory_path, memory_digest),
             ):
-                target[key] = {"path": str(path), "sha256": digest}
-            workload_path = FIXTURES / "minimal_workload.txt"
+                target[key] = {
+                    "path": "/dev/stdin" if key == stdin_resource else str(path),
+                    "sha256": digest,
+                }
+            binding_values = (
+                model_digest,
+                step_digest,
+                routing_digest,
+                memory_digest,
+                composite_digest,
+            )
+            workload_document = {
+                "header": (
+                    "HYBRID_TRANSFORMER model_parallel_NPU_group: 1 ep: 1 "
+                    "pp: 1 vpp: 1 ga: 1 all_gpus: 1 checkpoints: 0 "
+                    "checkpoint_initiates: 0 pp_comm 0 "
+                    "target_model_sha256: " + model_digest + " "
+                    "target_step_sha256: " + step_digest + " "
+                    "target_routing_sha256: " + routing_digest + " "
+                    "target_memory_event_plan_sha256: " + memory_digest + " "
+                    "target_workload_sha256: " + composite_digest
+                ),
+                "layers": [
+                    (
+                        f"target_layer_{layer}\t-1\t10\tNONE\t0\t10\tNONE\t0"
+                        f"\t10\tNONE\t0\t10\t" + "\t".join(binding_values)
+                    )
+                    for layer in range(workload_layer_count)
+                ],
+            }
+            if mutate_workload is not None:
+                mutate_workload(workload_document)
+            workload_path = run_directory / "target-workload.txt"
+            workload_path.write_text(
+                workload_document["header"]
+                + "\n"
+                + str(len(workload_document["layers"]))
+                + "\n"
+                + "\n".join(workload_document["layers"])
+                + "\n"
+            )
             manifest["workload"]["path"] = str(workload_path)
+            manifest["workload"]["sha256"] = "sha256:" + hashlib.sha256(
+                workload_path.read_bytes()
+            ).hexdigest()
             manifest["workload"]["target_workload_sha256"] = composite_digest
             if mutate_manifest is not None:
                 mutate_manifest(manifest)
-            manifest_path, _ = write_artifact("run.json", manifest)
+            manifest_path, _ = write_artifact("run", "run.json", manifest)
             result_path = run_directory / "result.json"
             completed = subprocess.run(
                 [
@@ -235,6 +313,11 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 ],
                 cwd=run_directory,
                 text=True,
+                input=(
+                    artifact_contents[stdin_resource]
+                    if stdin_resource is not None
+                    else None
+                ),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=30,
@@ -872,8 +955,8 @@ class AnalyticalRunContractTest(unittest.TestCase):
             lambda model: model["spec"].update(
                 {"logicalTrainableParameters": 8_414_884_746_525}
             ),
-            lambda model: model["spec"]["tensorManifest"]["groups"][1].update(
-                {"logicalElementsPerInstance": 66_060_287}
+            lambda model: model["spec"]["tensorRegistry"]["entries"][35].update(
+                {"instances": 249_855}
             ),
             lambda model: model["spec"]["checkpointStorage"].update(
                 {"value": 8_414_884_746_526}
@@ -887,9 +970,116 @@ class AnalyticalRunContractTest(unittest.TestCase):
 
                 self.assertEqual(completed.returncode, 2)
                 self.assertEqual(
-                    result["reject_code"], "TARGET_MODEL_IDENTITY_MISMATCH"
+                    result["reject_code"],
+                    (
+                        "TARGET_MODEL_REGISTRY_INVALID"
+                        if index == 5
+                        else "TARGET_MODEL_IDENTITY_MISMATCH"
+                    ),
                 )
                 self.assertEqual(result["readiness"]["target_model"], "BLOCKED")
+
+    def test_target_tensor_registry_reports_checkpoint_auxiliary_elements(self):
+        completed, result = self.run_mutated_target_contract()
+
+        self.assertEqual(completed.returncode, 0)
+        registry = json.loads(
+            (FIXTURES / "target_10t_model_manifest.json").read_text()
+        )["spec"]["tensorRegistry"]["entries"]
+        dtype_bytes = {
+            "BF16": 2,
+            "F32": 4,
+            "F8_E4M3": 1,
+            "F8_E8M0": 1,
+            "PACKED_FP4_I8": 1,
+            "I64": 8,
+        }
+
+        def independent_product(shape):
+            value = 1
+            for dimension in shape:
+                value *= dimension
+            return value
+
+        independent_logical = sum(
+            entry["instances"] * independent_product(entry["logicalShape"])
+            for entry in registry
+            if entry["trainableRole"] == "LOGICAL_TRAINABLE"
+        )
+        independent_auxiliary = sum(
+            entry["instances"]
+            * independent_product(entry["checkpointStorageShape"])
+            for entry in registry
+            if entry["trainableRole"] == "CHECKPOINT_AUXILIARY"
+        )
+        independent_storage = sum(
+            entry["instances"]
+            * independent_product(entry["checkpointStorageShape"])
+            * dtype_bytes[entry["checkpointStorageDtype"]]
+            for entry in registry
+        )
+        self.assertEqual(independent_logical, 8_414_884_746_526)
+        self.assertEqual(independent_auxiliary, 262_134_842_368)
+        self.assertEqual(independent_storage, 4_486_847_493_752)
+        model = result["results"]["target_workload"]["model"]
+        self.assertEqual(model["logical_trainable_parameters"], independent_logical)
+        self.assertEqual(
+            model["checkpoint_auxiliary_elements"],
+            {
+                "quant_scale": 262_128_636_928,
+                "routing_table": 6_205_440,
+                "total": 262_134_842_368,
+                "unit": "count",
+            },
+        )
+        self.assertEqual(
+            model["checkpoint_storage"]["value"], independent_storage
+        )
+
+    def test_target_tensor_registry_rejects_incomplete_or_ambiguous_types(self):
+        def remove_type(model):
+            model["spec"]["tensorRegistry"]["entries"].pop()
+
+        def duplicate_type_id(model):
+            entries = model["spec"]["tensorRegistry"]["entries"]
+            entries[1]["id"] = entries[0]["id"]
+
+        def unknown_role(model):
+            model["spec"]["tensorRegistry"]["entries"][0][
+                "trainableRole"
+            ] = "UNKNOWN_ROLE"
+
+        def unknown_scope(model):
+            model["spec"]["tensorRegistry"]["entries"][0][
+                "blockScope"
+            ] = "UNKNOWN_SCOPE"
+
+        def unknown_dtype(model):
+            model["spec"]["tensorRegistry"]["entries"][0][
+                "checkpointStorageDtype"
+            ] = "UNKNOWN_DTYPE"
+
+        def unclosed_fp4_shape(model):
+            model["spec"]["tensorRegistry"]["entries"][35][
+                "checkpointStorageShape"
+            ][1] += 1
+
+        for mutation in (
+            remove_type,
+            duplicate_type_id,
+            unknown_role,
+            unknown_scope,
+            unknown_dtype,
+            unclosed_fp4_shape,
+        ):
+            with self.subTest(mutation=mutation.__name__):
+                completed, result = self.run_mutated_target_contract(
+                    mutate_model=mutation
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(
+                    result["reject_code"], "TARGET_MODEL_REGISTRY_INVALID"
+                )
 
     def test_gts_exact_limit_is_accepted_and_reported(self):
         completed, result = self.run_mutated_target_contract()
@@ -959,6 +1149,73 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 )
                 self.assertEqual(result["readiness"]["target_model"], "READY")
                 self.assertEqual(result["readiness"]["target_step"], "BLOCKED")
+
+    def test_target_integer_lexemes_reject_fraction_and_exponent_smuggling(self):
+        for replacement in ("1.00000000000000001", "1e0"):
+            with self.subTest(replacement=replacement):
+                completed, result = self.run_mutated_target_contract(
+                    raw_replacements={
+                        "step": (
+                            ('"microBatchSequences": 1',
+                             f'"microBatchSequences": {replacement}'),
+                        )
+                    }
+                )
+
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(
+                    result["reject_code"], "TARGET_STEP_FACTOR_INVALID"
+                )
+
+    def test_target_integer_lexemes_reject_unsafe_and_uint64_boundaries(self):
+        cases = (
+            ("01", "TARGET_STEP_INVALID_JSON"),
+            ("9007199254740992", "TARGET_STEP_FACTOR_INVALID"),
+            ("18446744073709551615", "TARGET_STEP_FACTOR_INVALID"),
+            ("18446744073709551616", "TARGET_STEP_FACTOR_INVALID"),
+        )
+        for replacement, expected_code in cases:
+            with self.subTest(replacement=replacement):
+                completed, result = self.run_mutated_target_contract(
+                    raw_replacements={
+                        "step": (
+                            ('"microBatchSequences": 1',
+                             f'"microBatchSequences": {replacement}'),
+                        )
+                    }
+                )
+
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(result["reject_code"], expected_code)
+
+    def test_target_memory_rejects_negative_underflow_integer_lexeme(self):
+        component_values = {
+            "PARAMETERS": 0,
+            "GRADIENTS": 10,
+            "OPTIMIZER_STATES": 10,
+            "ACTIVATIONS": 10,
+            "COMMUNICATION_BUFFERS": 10,
+            "EXPERT_PLACEMENT": 10,
+            "RECOMPUTATION": 10,
+        }
+        completed, result = self.run_mutated_target_contract(
+            mutate_memory=lambda memory: self.materialize_memory_plan(
+                memory,
+                base_hbm_B=2000,
+                reserve_hbm_B=1000,
+                component_values=component_values,
+            ),
+            raw_replacements={
+                "memory_event_plan": (
+                    ('"peakBytes": 0', '"peakBytes": -1e-400'),
+                )
+            },
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(
+            result["reject_code"], "TARGET_MEMORY_COMPONENTS_INVALID"
+        )
 
     def test_gts_multiplication_overflow_is_rejected_before_limit_check(self):
         def overflow_uint64(step):
@@ -1038,6 +1295,231 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 result["evidence"][resource]["readiness"], "FIELD_UNVERIFIED"
             )
 
+    def test_target_envelope_is_rejected_before_artifact_io(self):
+        def invalidate_envelope_and_references(manifest):
+            manifest["target_workload"]["schema_version"] = "invalid/v0"
+            for resource in ("model", "step", "routing", "memory_event_plan"):
+                manifest["target_workload"][resource]["path"] = (
+                    "/definitely-not-present/target-resource.json"
+                )
+
+        completed, result = self.run_mutated_target_contract(
+            mutate_manifest=invalidate_envelope_and_references
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["reject_code"], "TARGET_WORKLOAD_SCHEMA_INVALID")
+        self.assertEqual(result["readiness"]["target_model"], "BLOCKED")
+
+    def test_target_resources_enforce_exact_bounded_stream_limits(self):
+        reject_codes = {
+            "model": "TARGET_MODEL_ARTIFACT_TOO_LARGE",
+            "step": "TARGET_STEP_ARTIFACT_TOO_LARGE",
+            "routing": "TARGET_ROUTING_ARTIFACT_TOO_LARGE",
+            "memory_event_plan": "TARGET_MEMORY_ARTIFACT_TOO_LARGE",
+        }
+        for resource, maximum_bytes in TARGET_RESOURCE_MAX_BYTES.items():
+            with self.subTest(resource=resource, boundary="exact"):
+                completed, result = self.run_mutated_target_contract(
+                    artifact_sizes={resource: maximum_bytes}
+                )
+                self.assertEqual(completed.returncode, 0)
+                self.assertEqual(result["status"], "VALID")
+
+            with self.subTest(resource=resource, boundary="plus_one"):
+                completed, result = self.run_mutated_target_contract(
+                    artifact_sizes={resource: maximum_bytes + 1}
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(result["reject_code"], reject_codes[resource])
+
+    def test_target_routing_bounded_loader_supports_nonseekable_stdin(self):
+        maximum_bytes = TARGET_RESOURCE_MAX_BYTES["routing"]
+        completed, result = self.run_mutated_target_contract(
+            artifact_sizes={"routing": maximum_bytes},
+            stdin_resource="routing",
+        )
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(result["status"], "VALID")
+
+        completed, result = self.run_mutated_target_contract(
+            artifact_sizes={"routing": maximum_bytes + 1},
+            stdin_resource="routing",
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(
+            result["reject_code"], "TARGET_ROUTING_ARTIFACT_TOO_LARGE"
+        )
+
+    def test_target_resource_schemas_reject_unknown_keys_and_identity_changes(self):
+        cases = (
+            (
+                "model-metadata-type",
+                {"mutate_model": lambda model: model.update({"metadata": 0})},
+                "TARGET_MODEL_SCHEMA_INVALID",
+            ),
+            (
+                "model-metadata-id",
+                {
+                    "mutate_model": lambda model: model["metadata"].update(
+                        {"id": "different-model"}
+                    )
+                },
+                "TARGET_MODEL_SCHEMA_INVALID",
+            ),
+            (
+                "model-root-extra",
+                {"mutate_model": lambda model: model.update({"extra": True})},
+                "TARGET_MODEL_SCHEMA_INVALID",
+            ),
+            (
+                "model-source-extra",
+                {
+                    "mutate_model": lambda model: model["spec"]["source"].update(
+                        {"branch": "main"}
+                    )
+                },
+                "TARGET_MODEL_SCHEMA_INVALID",
+            ),
+            (
+                "model-architecture-extra",
+                {
+                    "mutate_model": lambda model: model["spec"][
+                        "architecture"
+                    ].update({"denseLayers": 3})
+                },
+                "TARGET_MODEL_SCHEMA_INVALID",
+            ),
+            (
+                "model-registry-extra",
+                {
+                    "mutate_model": lambda model: model["spec"][
+                        "tensorRegistry"
+                    ].update({"groups": []})
+                },
+                "TARGET_MODEL_SCHEMA_INVALID",
+            ),
+            (
+                "model-registry-entry-extra",
+                {
+                    "mutate_model": lambda model: model["spec"][
+                        "tensorRegistry"
+                    ]["entries"][0].update({"declaredElements": 1})
+                },
+                "TARGET_MODEL_REGISTRY_INVALID",
+            ),
+            (
+                "model-evidence-extra",
+                {
+                    "mutate_model": lambda model: model["spec"]["evidence"][
+                        0
+                    ].update({"note": "not-controlled"})
+                },
+                "TARGET_MODEL_SCHEMA_INVALID",
+            ),
+            (
+                "model-evidence-source-extra",
+                {
+                    "mutate_model": lambda model: model["spec"]["evidence"][
+                        0
+                    ]["source"].update({"mirror": "none"})
+                },
+                "TARGET_MODEL_SCHEMA_INVALID",
+            ),
+            (
+                "step-spec-extra",
+                {
+                    "mutate_step": lambda step: step["spec"].update(
+                        {"extra": True}
+                    )
+                },
+                "TARGET_STEP_SCHEMA_INVALID",
+            ),
+            (
+                "step-metadata-extra",
+                {
+                    "mutate_step": lambda step: step["metadata"].update(
+                        {"name": "unexpected"}
+                    )
+                },
+                "TARGET_STEP_SCHEMA_INVALID",
+            ),
+            (
+                "routing-root-projection",
+                {
+                    "mutate_routing": lambda routing: routing.update(
+                        {"projectedA2ATraffic": {"totalBytes": 1}}
+                    )
+                },
+                "TARGET_ROUTING_SCHEMA_INVALID",
+            ),
+            (
+                "routing-policy-extension",
+                {
+                    "mutate_routing": lambda routing: routing["spec"][
+                        "policy"
+                    ].update(
+                        {
+                            "extensions": {
+                                "projected_a2a_traffic": {"total_bytes": 1}
+                            }
+                        }
+                    )
+                },
+                "TARGET_ROUTING_SCHEMA_INVALID",
+            ),
+            (
+                "routing-unknown-algorithm",
+                {
+                    "mutate_routing": lambda routing: routing["spec"][
+                        "policy"
+                    ].update({"algorithm": "UNKNOWN_PROJECTOR"})
+                },
+                "TARGET_ROUTING_SCHEMA_INVALID",
+            ),
+            (
+                "memory-component-extra",
+                {
+                    "mutate_memory": lambda memory: memory["spec"][
+                        "components"
+                    ][0].update({"checkpointBytes": 1})
+                },
+                "TARGET_MEMORY_SCHEMA_INVALID",
+            ),
+            (
+                "memory-bindings-extra",
+                {
+                    "mutate_memory": lambda memory: memory["spec"][
+                        "bindings"
+                    ].update({"allocator": "UNBOUND"})
+                },
+                "TARGET_MEMORY_SCHEMA_INVALID",
+            ),
+            (
+                "memory-capacity-extra",
+                {
+                    "mutate_memory": lambda memory: memory["spec"][
+                        "capacity"
+                    ].update({"runtimeFreeHbmB": 1})
+                },
+                "TARGET_MEMORY_SCHEMA_INVALID",
+            ),
+            (
+                "target-reference-extra",
+                {
+                    "mutate_manifest": lambda manifest: manifest[
+                        "target_workload"
+                    ]["model"].update({"mediaType": "application/json"})
+                },
+                "TARGET_WORKLOAD_SCHEMA_INVALID",
+            ),
+        )
+        for name, kwargs, expected_code in cases:
+            with self.subTest(name=name):
+                completed, result = self.run_mutated_target_contract(**kwargs)
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(result["reject_code"], expected_code)
+
     def test_target_workload_composite_digest_mismatch_fails_closed(self):
         wrong_digest = "sha256:" + "0" * 64
 
@@ -1058,16 +1540,93 @@ class AnalyticalRunContractTest(unittest.TestCase):
 
     def test_aicb_workload_binding_must_match_target_composite(self):
         completed, result = self.run_mutated_target_contract(
-            mutate_manifest=lambda manifest: manifest["workload"].update(
-                {"target_workload_sha256": "sha256:" + "0" * 64}
+            mutate_workload=lambda workload: workload.update(
+                {
+                    "header": workload["header"].replace(
+                        workload["header"].split()[-1],
+                        "sha256:" + "0" * 64,
+                    )
+                }
             )
         )
 
         self.assertEqual(completed.returncode, 2)
         self.assertEqual(
-            result["reject_code"], "TARGET_WORKLOAD_BINDING_MISMATCH"
+            result["reject_code"], "TARGET_AICB_BINDING_MISMATCH"
         )
         self.assertEqual(result["readiness"]["target_workload"], "BLOCKED")
+
+    def test_target_aicb_binding_is_consumed_from_header_and_event(self):
+        completed, result = self.run_mutated_target_contract()
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(result["readiness"]["target_workload"], "READY")
+
+    def test_arbitrary_legacy_workload_cannot_claim_the_target_contract(self):
+        def replace_with_legacy(workload):
+            workload["header"] = (
+                "HYBRID_TRANSFORMER model_parallel_NPU_group: 1 ep: 1 pp: 1 "
+                "vpp: 1 ga: 1 all_gpus: 1 checkpoints: 0 "
+                "checkpoint_initiates: 0 pp_comm 0"
+            )
+            workload["layers"] = [
+                "legacy_layer\t-1\t10\tNONE\t0\t10\tNONE\t0\t10\tNONE\t0\t10"
+            ]
+
+        completed, result = self.run_mutated_target_contract(
+            mutate_workload=replace_with_legacy
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["reject_code"], "TARGET_AICB_BINDING_MISSING")
+        self.assertEqual(result["readiness"]["target_workload"], "BLOCKED")
+
+    def test_target_aicb_event_requires_all_resource_bindings(self):
+        def remove_model_binding(workload):
+            fields = workload["layers"][0].split("\t")
+            del fields[12]
+            workload["layers"][0] = "\t".join(fields)
+
+        completed, result = self.run_mutated_target_contract(
+            mutate_workload=remove_model_binding
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(
+            result["reject_code"], "TARGET_AICB_EVENT_BINDING_MISSING"
+        )
+
+    def test_target_aicb_event_single_hash_tamper_fails_closed(self):
+        def tamper_routing_binding(workload):
+            fields = workload["layers"][0].split("\t")
+            fields[14] = "sha256:" + "0" * 64
+            workload["layers"][0] = "\t".join(fields)
+
+        completed, result = self.run_mutated_target_contract(
+            mutate_workload=tamper_routing_binding
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(
+            result["reject_code"], "TARGET_AICB_EVENT_BINDING_MISMATCH"
+        )
+
+    def test_target_aicb_binding_propagates_to_every_layer_event(self):
+        def tamper_middle_layer(workload):
+            fields = workload["layers"][1].split("\t")
+            fields[13] = "sha256:" + "f" * 64
+            workload["layers"][1] = "\t".join(fields)
+
+        completed, result = self.run_mutated_target_contract(
+            mutate_workload=tamper_middle_layer,
+            workload_layer_count=3,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(
+            result["reject_code"], "TARGET_AICB_EVENT_BINDING_MISMATCH"
+        )
 
     def test_target_resource_dependency_digests_are_layered(self):
         cases = (
@@ -1122,7 +1681,7 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 self.assertEqual(completed.returncode, 2)
                 self.assertEqual(
                     result["reject_code"],
-                    "TARGET_ROUTING_PROJECTED_A2A_FORBIDDEN",
+                    "TARGET_ROUTING_SCHEMA_INVALID",
                 )
                 self.assertEqual(
                     result["readiness"]["target_routing"], "BLOCKED"
@@ -1150,6 +1709,54 @@ class AnalyticalRunContractTest(unittest.TestCase):
         self.assertEqual(
             result["readiness"]["target_memory_event_plan"], "BLOCKED"
         )
+
+    def test_each_target_resource_requires_one_resolved_consistent_evidence_ref(self):
+        resources = (
+            ("model", "mutate_model", "TARGET_MODEL_SCHEMA_INVALID"),
+            ("step", "mutate_step", "TARGET_STEP_SCHEMA_INVALID"),
+            ("routing", "mutate_routing", "TARGET_ROUTING_SCHEMA_INVALID"),
+            ("memory", "mutate_memory", "TARGET_MEMORY_SCHEMA_INVALID"),
+        )
+
+        def missing_ref(document):
+            document["spec"].pop("evidenceRef", None)
+
+        def unresolved_ref(document):
+            document["spec"]["evidenceRef"] = "does-not-exist"
+
+        def conflicting_readiness(document):
+            document["spec"]["readiness"] = "FIELD_VERIFIED"
+
+        def invalid_record_readiness(document):
+            document["spec"]["evidence"][0]["readiness"] = "GARBAGE"
+
+        def ambiguous_records(document):
+            second = json.loads(json.dumps(document["spec"]["evidence"][0]))
+            second["id"] = "second-evidence-record"
+            document["spec"]["evidence"].append(second)
+
+        for resource, keyword, expected_code in resources:
+            for mutation in (
+                missing_ref,
+                unresolved_ref,
+                conflicting_readiness,
+                invalid_record_readiness,
+                ambiguous_records,
+            ):
+                with self.subTest(resource=resource, mutation=mutation.__name__):
+                    completed, result = self.run_mutated_target_contract(
+                        **{keyword: mutation}
+                    )
+                    self.assertEqual(completed.returncode, 2)
+                    self.assertEqual(result["reject_code"], expected_code)
+                    self.assertEqual(
+                        result["readiness"][
+                            "target_memory_event_plan"
+                            if resource == "memory"
+                            else f"target_{resource}"
+                        ],
+                        "BLOCKED",
+                    )
 
     def test_unbound_memory_policies_remain_symbolic_and_checkpoint_is_not_hbm(self):
         completed, result = self.run_mutated_target_contract()

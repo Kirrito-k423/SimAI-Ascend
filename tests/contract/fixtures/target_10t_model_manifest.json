@@ -22,36 +22,1261 @@
       "expertIntermediateSize": 3072,
       "sharedExperts": 1
     },
-    "tensorManifest": {
-      "representation": "VERIFIED_TENSOR_GROUPS_V1",
-      "groups": [
+    "tensorRegistry": {
+      "representation": "CANONICAL_TENSOR_TYPE_REGISTRY_V1",
+      "canonicalDigest": "sha256:f5984772e2fca84aeb8e36786b1273c26576a083cf17dd07a1eb0637e0d9daa2",
+      "entries": [
         {
-          "id": "official-baseline-logical-trainable",
+          "id": "type-000-global-hyperconnection",
           "instances": 1,
-          "logicalElementsPerInstance": 1598837347742,
+          "logicalShape": [
+            1
+          ],
+          "checkpointStorageShape": [
+            1
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
           "trainableRole": "LOGICAL_TRAINABLE",
-          "blockScope": "BASELINE_ALL"
+          "blockScope": "GLOBAL",
+          "tensorKind": "HYPERCONNECTION"
         },
         {
-          "id": "added-routed-expert-weights",
-          "instances": 103168,
-          "logicalElementsPerInstance": 66060288,
+          "id": "type-001-mtp_block-hyperconnection",
+          "instances": 1,
+          "logicalShape": [
+            1
+          ],
+          "checkpointStorageShape": [
+            1
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
           "trainableRole": "LOGICAL_TRAINABLE",
-          "blockScope": "MAIN_AND_MTP_MOE"
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "HYPERCONNECTION"
         },
         {
-          "id": "added-router-weights",
-          "instances": 103168,
-          "logicalElementsPerInstance": 7168,
+          "id": "type-002-main_block-attention",
+          "instances": 60,
+          "logicalShape": [
+            1024,
+            7168
+          ],
+          "checkpointStorageShape": [
+            1024,
+            7168
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
           "trainableRole": "LOGICAL_TRAINABLE",
-          "blockScope": "MAIN_AND_MTP_MOE"
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ATTENTION"
         },
         {
-          "id": "added-non-hash-router-biases",
-          "instances": 98176,
-          "logicalElementsPerInstance": 1,
+          "id": "type-003-main_block-quant-scale",
+          "instances": 61,
+          "logicalShape": [
+            12,
+            56
+          ],
+          "checkpointStorageShape": [
+            12,
+            56
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-004-mtp_block-quant-scale",
+          "instances": 1,
+          "logicalShape": [
+            12,
+            56
+          ],
+          "checkpointStorageShape": [
+            12,
+            56
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-005-main_block-quant-scale",
+          "instances": 61,
+          "logicalShape": [
+            128,
+            32
+          ],
+          "checkpointStorageShape": [
+            128,
+            32
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-006-mtp_block-quant-scale",
+          "instances": 1,
+          "logicalShape": [
+            128,
+            32
+          ],
+          "checkpointStorageShape": [
+            128,
+            32
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-007-main_block-attention",
+          "instances": 31,
+          "logicalShape": [
+            128,
+            512
+          ],
+          "checkpointStorageShape": [
+            128,
+            512
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
           "trainableRole": "LOGICAL_TRAINABLE",
-          "blockScope": "NON_HASH_MAIN_AND_MTP_MOE"
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-008-main_block-norm",
+          "instances": 30,
+          "logicalShape": [
+            128
+          ],
+          "checkpointStorageShape": [
+            128
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "NORM"
+        },
+        {
+          "id": "type-009-main_block-attention",
+          "instances": 61,
+          "logicalShape": [
+            128
+          ],
+          "checkpointStorageShape": [
+            128
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-010-mtp_block-attention",
+          "instances": 1,
+          "logicalShape": [
+            128
+          ],
+          "checkpointStorageShape": [
+            128
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-011-main_block-routing-table",
+          "instances": 3,
+          "logicalShape": [
+            129280,
+            16
+          ],
+          "checkpointStorageShape": [
+            129280,
+            16
+          ],
+          "logicalDtype": "I64",
+          "checkpointStorageDtype": "I64",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ROUTING_TABLE"
+        },
+        {
+          "id": "type-012-global-embedding",
+          "instances": 1,
+          "logicalShape": [
+            129280,
+            7168
+          ],
+          "checkpointStorageShape": [
+            129280,
+            7168
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "GLOBAL",
+          "tensorKind": "EMBEDDING"
+        },
+        {
+          "id": "type-013-global-head",
+          "instances": 1,
+          "logicalShape": [
+            129280,
+            7168
+          ],
+          "checkpointStorageShape": [
+            129280,
+            7168
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "GLOBAL",
+          "tensorKind": "HEAD"
+        },
+        {
+          "id": "type-014-main_block-attention",
+          "instances": 61,
+          "logicalShape": [
+            1536,
+            7168
+          ],
+          "checkpointStorageShape": [
+            1536,
+            7168
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-015-mtp_block-attention",
+          "instances": 1,
+          "logicalShape": [
+            1536,
+            7168
+          ],
+          "checkpointStorageShape": [
+            1536,
+            7168
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-016-main_block-norm",
+          "instances": 61,
+          "logicalShape": [
+            1536
+          ],
+          "checkpointStorageShape": [
+            1536
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "NORM"
+        },
+        {
+          "id": "type-017-mtp_block-norm",
+          "instances": 1,
+          "logicalShape": [
+            1536
+          ],
+          "checkpointStorageShape": [
+            1536
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "NORM"
+        },
+        {
+          "id": "type-018-main_block-attention",
+          "instances": 61,
+          "logicalShape": [
+            16384,
+            4096
+          ],
+          "checkpointStorageShape": [
+            16384,
+            4096
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-019-mtp_block-attention",
+          "instances": 1,
+          "logicalShape": [
+            16384,
+            4096
+          ],
+          "checkpointStorageShape": [
+            16384,
+            4096
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-020-main_block-router",
+          "instances": 61,
+          "logicalShape": [
+            2048,
+            7168
+          ],
+          "checkpointStorageShape": [
+            2048,
+            7168
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ROUTER"
+        },
+        {
+          "id": "type-021-mtp_block-router",
+          "instances": 1,
+          "logicalShape": [
+            2048,
+            7168
+          ],
+          "checkpointStorageShape": [
+            2048,
+            7168
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "ROUTER"
+        },
+        {
+          "id": "type-022-main_block-router",
+          "instances": 58,
+          "logicalShape": [
+            2048
+          ],
+          "checkpointStorageShape": [
+            2048
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ROUTER"
+        },
+        {
+          "id": "type-023-mtp_block-router",
+          "instances": 1,
+          "logicalShape": [
+            2048
+          ],
+          "checkpointStorageShape": [
+            2048
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "ROUTER"
+        },
+        {
+          "id": "type-024-main_block-hyperconnection",
+          "instances": 122,
+          "logicalShape": [
+            24,
+            28672
+          ],
+          "checkpointStorageShape": [
+            24,
+            28672
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "HYPERCONNECTION"
+        },
+        {
+          "id": "type-025-mtp_block-hyperconnection",
+          "instances": 2,
+          "logicalShape": [
+            24,
+            28672
+          ],
+          "checkpointStorageShape": [
+            24,
+            28672
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "HYPERCONNECTION"
+        },
+        {
+          "id": "type-026-main_block-quant-scale",
+          "instances": 122,
+          "logicalShape": [
+            24,
+            56
+          ],
+          "checkpointStorageShape": [
+            24,
+            56
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-027-mtp_block-quant-scale",
+          "instances": 2,
+          "logicalShape": [
+            24,
+            56
+          ],
+          "checkpointStorageShape": [
+            24,
+            56
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-028-main_block-hyperconnection",
+          "instances": 122,
+          "logicalShape": [
+            24
+          ],
+          "checkpointStorageShape": [
+            24
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "HYPERCONNECTION"
+        },
+        {
+          "id": "type-029-mtp_block-hyperconnection",
+          "instances": 2,
+          "logicalShape": [
+            24
+          ],
+          "checkpointStorageShape": [
+            24
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "HYPERCONNECTION"
+        },
+        {
+          "id": "type-030-main_block-attention",
+          "instances": 60,
+          "logicalShape": [
+            256,
+            7168
+          ],
+          "checkpointStorageShape": [
+            256,
+            7168
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-031-main_block-hyperconnection",
+          "instances": 122,
+          "logicalShape": [
+            3
+          ],
+          "checkpointStorageShape": [
+            3
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "HYPERCONNECTION"
+        },
+        {
+          "id": "type-032-mtp_block-hyperconnection",
+          "instances": 2,
+          "logicalShape": [
+            3
+          ],
+          "checkpointStorageShape": [
+            3
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "HYPERCONNECTION"
+        },
+        {
+          "id": "type-033-main_block-quant-scale",
+          "instances": 249856,
+          "logicalShape": [
+            3072,
+            224
+          ],
+          "checkpointStorageShape": [
+            3072,
+            224
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-034-mtp_block-quant-scale",
+          "instances": 4096,
+          "logicalShape": [
+            3072,
+            224
+          ],
+          "checkpointStorageShape": [
+            3072,
+            224
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-035-main_block-routed-expert",
+          "instances": 249856,
+          "logicalShape": [
+            3072,
+            7168
+          ],
+          "checkpointStorageShape": [
+            3072,
+            3584
+          ],
+          "logicalDtype": "FP4",
+          "checkpointStorageDtype": "PACKED_FP4_I8",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ROUTED_EXPERT"
+        },
+        {
+          "id": "type-036-mtp_block-routed-expert",
+          "instances": 4096,
+          "logicalShape": [
+            3072,
+            7168
+          ],
+          "checkpointStorageShape": [
+            3072,
+            3584
+          ],
+          "logicalDtype": "FP4",
+          "checkpointStorageDtype": "PACKED_FP4_I8",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "ROUTED_EXPERT"
+        },
+        {
+          "id": "type-037-main_block-shared-expert",
+          "instances": 122,
+          "logicalShape": [
+            3072,
+            7168
+          ],
+          "checkpointStorageShape": [
+            3072,
+            7168
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "SHARED_EXPERT"
+        },
+        {
+          "id": "type-038-mtp_block-shared-expert",
+          "instances": 2,
+          "logicalShape": [
+            3072,
+            7168
+          ],
+          "checkpointStorageShape": [
+            3072,
+            7168
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "SHARED_EXPERT"
+        },
+        {
+          "id": "type-039-main_block-attention",
+          "instances": 30,
+          "logicalShape": [
+            4,
+            1024
+          ],
+          "checkpointStorageShape": [
+            4,
+            1024
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-040-main_block-attention",
+          "instances": 30,
+          "logicalShape": [
+            4,
+            256
+          ],
+          "checkpointStorageShape": [
+            4,
+            256
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-041-global-hyperconnection",
+          "instances": 1,
+          "logicalShape": [
+            4,
+            28672
+          ],
+          "checkpointStorageShape": [
+            4,
+            28672
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "GLOBAL",
+          "tensorKind": "HYPERCONNECTION"
+        },
+        {
+          "id": "type-042-mtp_block-hyperconnection",
+          "instances": 1,
+          "logicalShape": [
+            4,
+            28672
+          ],
+          "checkpointStorageShape": [
+            4,
+            28672
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "HYPERCONNECTION"
+        },
+        {
+          "id": "type-043-main_block-quant-scale",
+          "instances": 61,
+          "logicalShape": [
+            4,
+            56
+          ],
+          "checkpointStorageShape": [
+            4,
+            56
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-044-mtp_block-quant-scale",
+          "instances": 1,
+          "logicalShape": [
+            4,
+            56
+          ],
+          "checkpointStorageShape": [
+            4,
+            56
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-045-global-hyperconnection",
+          "instances": 1,
+          "logicalShape": [
+            4
+          ],
+          "checkpointStorageShape": [
+            4
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "GLOBAL",
+          "tensorKind": "HYPERCONNECTION"
+        },
+        {
+          "id": "type-046-mtp_block-hyperconnection",
+          "instances": 1,
+          "logicalShape": [
+            4
+          ],
+          "checkpointStorageShape": [
+            4
+          ],
+          "logicalDtype": "F32",
+          "checkpointStorageDtype": "F32",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "HYPERCONNECTION"
+        },
+        {
+          "id": "type-047-main_block-quant-scale",
+          "instances": 61,
+          "logicalShape": [
+            512,
+            12
+          ],
+          "checkpointStorageShape": [
+            512,
+            12
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-048-mtp_block-quant-scale",
+          "instances": 1,
+          "logicalShape": [
+            512,
+            12
+          ],
+          "checkpointStorageShape": [
+            512,
+            12
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-049-main_block-attention",
+          "instances": 62,
+          "logicalShape": [
+            512,
+            7168
+          ],
+          "checkpointStorageShape": [
+            512,
+            7168
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-050-main_block-attention",
+          "instances": 61,
+          "logicalShape": [
+            512,
+            7168
+          ],
+          "checkpointStorageShape": [
+            512,
+            7168
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-051-mtp_block-attention",
+          "instances": 1,
+          "logicalShape": [
+            512,
+            7168
+          ],
+          "checkpointStorageShape": [
+            512,
+            7168
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-052-main_block-norm",
+          "instances": 122,
+          "logicalShape": [
+            512
+          ],
+          "checkpointStorageShape": [
+            512
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "NORM"
+        },
+        {
+          "id": "type-053-mtp_block-norm",
+          "instances": 1,
+          "logicalShape": [
+            512
+          ],
+          "checkpointStorageShape": [
+            512
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "NORM"
+        },
+        {
+          "id": "type-054-main_block-quant-scale",
+          "instances": 61,
+          "logicalShape": [
+            56,
+            128
+          ],
+          "checkpointStorageShape": [
+            56,
+            128
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-055-mtp_block-quant-scale",
+          "instances": 1,
+          "logicalShape": [
+            56,
+            128
+          ],
+          "checkpointStorageShape": [
+            56,
+            128
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-056-main_block-quant-scale",
+          "instances": 61,
+          "logicalShape": [
+            56,
+            24
+          ],
+          "checkpointStorageShape": [
+            56,
+            24
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-057-mtp_block-quant-scale",
+          "instances": 1,
+          "logicalShape": [
+            56,
+            24
+          ],
+          "checkpointStorageShape": [
+            56,
+            24
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-058-mtp_block-quant-scale",
+          "instances": 2,
+          "logicalShape": [
+            56,
+            56
+          ],
+          "checkpointStorageShape": [
+            56,
+            56
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-059-main_block-quant-scale",
+          "instances": 30,
+          "logicalShape": [
+            64,
+            12
+          ],
+          "checkpointStorageShape": [
+            64,
+            12
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-060-main_block-attention-indexer",
+          "instances": 30,
+          "logicalShape": [
+            64,
+            7168
+          ],
+          "checkpointStorageShape": [
+            64,
+            7168
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ATTENTION_INDEXER"
+        },
+        {
+          "id": "type-061-main_block-attention",
+          "instances": 61,
+          "logicalShape": [
+            65536,
+            1536
+          ],
+          "checkpointStorageShape": [
+            65536,
+            1536
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-062-mtp_block-attention",
+          "instances": 1,
+          "logicalShape": [
+            65536,
+            1536
+          ],
+          "checkpointStorageShape": [
+            65536,
+            1536
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-063-main_block-attention",
+          "instances": 61,
+          "logicalShape": [
+            7168,
+            16384
+          ],
+          "checkpointStorageShape": [
+            7168,
+            16384
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-064-mtp_block-attention",
+          "instances": 1,
+          "logicalShape": [
+            7168,
+            16384
+          ],
+          "checkpointStorageShape": [
+            7168,
+            16384
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "ATTENTION"
+        },
+        {
+          "id": "type-065-main_block-routed-expert",
+          "instances": 124928,
+          "logicalShape": [
+            7168,
+            3072
+          ],
+          "checkpointStorageShape": [
+            7168,
+            1536
+          ],
+          "logicalDtype": "FP4",
+          "checkpointStorageDtype": "PACKED_FP4_I8",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ROUTED_EXPERT"
+        },
+        {
+          "id": "type-066-mtp_block-routed-expert",
+          "instances": 2048,
+          "logicalShape": [
+            7168,
+            3072
+          ],
+          "checkpointStorageShape": [
+            7168,
+            1536
+          ],
+          "logicalDtype": "FP4",
+          "checkpointStorageDtype": "PACKED_FP4_I8",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "ROUTED_EXPERT"
+        },
+        {
+          "id": "type-067-main_block-shared-expert",
+          "instances": 61,
+          "logicalShape": [
+            7168,
+            3072
+          ],
+          "checkpointStorageShape": [
+            7168,
+            3072
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "SHARED_EXPERT"
+        },
+        {
+          "id": "type-068-mtp_block-shared-expert",
+          "instances": 1,
+          "logicalShape": [
+            7168,
+            3072
+          ],
+          "checkpointStorageShape": [
+            7168,
+            3072
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "SHARED_EXPERT"
+        },
+        {
+          "id": "type-069-mtp_block-mtp-projection",
+          "instances": 2,
+          "logicalShape": [
+            7168,
+            7168
+          ],
+          "checkpointStorageShape": [
+            7168,
+            7168
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "MTP_PROJECTION"
+        },
+        {
+          "id": "type-070-main_block-quant-scale",
+          "instances": 124928,
+          "logicalShape": [
+            7168,
+            96
+          ],
+          "checkpointStorageShape": [
+            7168,
+            96
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-071-mtp_block-quant-scale",
+          "instances": 2048,
+          "logicalShape": [
+            7168,
+            96
+          ],
+          "checkpointStorageShape": [
+            7168,
+            96
+          ],
+          "logicalDtype": "F8_E8M0",
+          "checkpointStorageDtype": "F8_E8M0",
+          "trainableRole": "CHECKPOINT_AUXILIARY",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "QUANT_SCALE"
+        },
+        {
+          "id": "type-072-global-norm",
+          "instances": 1,
+          "logicalShape": [
+            7168
+          ],
+          "checkpointStorageShape": [
+            7168
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "GLOBAL",
+          "tensorKind": "NORM"
+        },
+        {
+          "id": "type-073-main_block-norm",
+          "instances": 122,
+          "logicalShape": [
+            7168
+          ],
+          "checkpointStorageShape": [
+            7168
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "NORM"
+        },
+        {
+          "id": "type-074-mtp_block-norm",
+          "instances": 5,
+          "logicalShape": [
+            7168
+          ],
+          "checkpointStorageShape": [
+            7168
+          ],
+          "logicalDtype": "BF16",
+          "checkpointStorageDtype": "BF16",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MTP_BLOCK",
+          "tensorKind": "NORM"
+        },
+        {
+          "id": "type-075-main_block-attention-indexer",
+          "instances": 30,
+          "logicalShape": [
+            8192,
+            1536
+          ],
+          "checkpointStorageShape": [
+            8192,
+            1536
+          ],
+          "logicalDtype": "F8_E4M3",
+          "checkpointStorageDtype": "F8_E4M3",
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_BLOCK",
+          "tensorKind": "ATTENTION_INDEXER"
         }
       ]
     },
@@ -67,6 +1292,7 @@
       "unit": "B",
       "semantics": "FIXED_QUANTIZED_CHECKPOINT_ONLY_NOT_TRAINING_HBM"
     },
+    "evidenceRef": "fixed-public-model-source",
     "evidenceClass": "USER_INPUT",
     "readiness": "FIELD_UNVERIFIED",
     "evidence": [
@@ -88,6 +1314,12 @@
         },
         "sanitization": "public-metadata-only"
       }
-    ]
+    ],
+    "checkpointAuxiliaryElements": {
+      "quantScale": 262128636928,
+      "routingTable": 6205440,
+      "total": 262134842368,
+      "unit": "count"
+    }
   }
 }

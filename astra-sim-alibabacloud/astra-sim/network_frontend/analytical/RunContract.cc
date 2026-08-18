@@ -36,6 +36,10 @@ const char* kResultSchemaVersion = "simai.result/v1";
 const size_t kMaximumRoutingArtifactBytes = 1024U * 1024U;
 const int kMaximumDenseRoutingRanks = 256;
 const size_t kMaximumDenseRoutingCells = 256U * 256U;
+const size_t kMaximumTargetModelArtifactBytes = 256U * 1024U;
+const size_t kMaximumTargetStepArtifactBytes = 64U * 1024U;
+const size_t kMaximumTargetRoutingArtifactBytes = 64U * 1024U;
+const size_t kMaximumTargetMemoryArtifactBytes = 128U * 1024U;
 
 uint32_t RotateRight(uint32_t value, uint32_t count) {
   return (value >> count) | (value << (32U - count));
@@ -260,6 +264,7 @@ class JsonValue {
   Type type;
   bool boolean;
   double number;
+  std::string number_lexeme;
   std::string string;
   std::map<std::string, JsonValue> object;
   std::vector<JsonValue> array;
@@ -508,6 +513,7 @@ class JsonParser {
     JsonValue value;
     value.type = JsonValue::Type::Number;
     value.number = parsed;
+    value.number_lexeme = encoded;
     return value;
   }
 
@@ -521,6 +527,21 @@ const JsonValue* Member(const JsonValue& object, const std::string& key) {
   }
   const auto found = object.object.find(key);
   return found == object.object.end() ? nullptr : &found->second;
+}
+
+bool ObjectHasExactKeys(
+    const JsonValue& object,
+    const std::vector<std::string>& expected_keys) {
+  if (object.type != JsonValue::Type::Object ||
+      object.object.size() != expected_keys.size()) {
+    return false;
+  }
+  for (const std::string& key : expected_keys) {
+    if (object.object.count(key) != 1U) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool StringMember(
@@ -547,6 +568,74 @@ bool NumberMember(
   return true;
 }
 
+bool ExactUnsignedDecimal(
+    const JsonValue& value,
+    uint64_t maximum,
+    bool allow_zero,
+    uint64_t* parsed) {
+  if (value.type != JsonValue::Type::Number || value.number_lexeme.empty() ||
+      (value.number_lexeme.size() > 1U && value.number_lexeme[0] == '0') ||
+      value.number_lexeme[0] == '-') {
+    return false;
+  }
+  uint64_t accumulated = 0U;
+  for (const char digit : value.number_lexeme) {
+    if (digit < '0' || digit > '9') {
+      return false;
+    }
+    const uint64_t numeric_digit = static_cast<uint64_t>(digit - '0');
+    if (accumulated > (maximum - numeric_digit) / 10U) {
+      return false;
+    }
+    accumulated = accumulated * 10U + numeric_digit;
+  }
+  if (!allow_zero && accumulated == 0U) {
+    return false;
+  }
+  *parsed = accumulated;
+  return true;
+}
+
+bool ExactPositiveUint64Member(
+    const JsonValue& object,
+    const std::string& key,
+    uint64_t* value) {
+  const JsonValue* member = Member(object, key);
+  const uint64_t maximum_exact_json_integer = 9007199254740991ULL;
+  return member != nullptr &&
+      ExactUnsignedDecimal(
+          *member, maximum_exact_json_integer, false, value);
+}
+
+bool ExactNonNegativeUint64Member(
+    const JsonValue& object,
+    const std::string& key,
+    uint64_t* value) {
+  const JsonValue* member = Member(object, key);
+  const uint64_t maximum_exact_json_integer = 9007199254740991ULL;
+  return member != nullptr &&
+      ExactUnsignedDecimal(
+          *member, maximum_exact_json_integer, true, value);
+}
+
+bool ExactPositiveIntMember(
+    const JsonValue& object,
+    const std::string& key,
+    int* value) {
+  const JsonValue* member = Member(object, key);
+  uint64_t parsed = 0U;
+  if (member == nullptr ||
+      !ExactUnsignedDecimal(
+          *member,
+          static_cast<uint64_t>(std::numeric_limits<int>::max()),
+          false,
+          &parsed)) {
+    return false;
+  }
+  *value = static_cast<int>(parsed);
+  return true;
+}
+
 bool BooleanMember(
     const JsonValue& object,
     const std::string& key,
@@ -566,21 +655,6 @@ bool PositiveUint64Member(
   double number = 0.0;
   const double maximum_exact_json_integer = 9007199254740991.0;
   if (!NumberMember(object, key, &number) || number < 1.0 ||
-      number > maximum_exact_json_integer ||
-      std::floor(number) != number) {
-    return false;
-  }
-  *value = static_cast<uint64_t>(number);
-  return true;
-}
-
-bool NonNegativeUint64Member(
-    const JsonValue& object,
-    const std::string& key,
-    uint64_t* value) {
-  double number = 0.0;
-  const double maximum_exact_json_integer = 9007199254740991.0;
-  if (!NumberMember(object, key, &number) || number < 0.0 ||
       number > maximum_exact_json_integer ||
       std::floor(number) != number) {
     return false;
@@ -971,8 +1045,61 @@ bool LoadArtifact(
   return true;
 }
 
+bool ValidateTargetWorkloadEnvelope(
+    const JsonValue& target_workload,
+    AnalyticalRunContract* contract) {
+  if (Member(target_workload, "routing") == nullptr) {
+    contract->target_routing_ready = false;
+    RejectUnsupported(
+        contract,
+        "TARGET_ROUTING_REQUIRED",
+        "The Target Workload requires a separate Routing Artifact.",
+        "Provide the immutable target_workload.routing reference.");
+    return false;
+  }
+  std::string schema_version;
+  std::string composition;
+  std::string composite_digest;
+  const std::vector<std::string> resource_names = {
+      "model", "step", "routing", "memory_event_plan"};
+  bool valid = ObjectHasExactKeys(
+      target_workload,
+      {"schema_version",
+       "composition",
+       "sha256",
+       "model",
+       "step",
+       "routing",
+       "memory_event_plan"}) &&
+      StringMember(target_workload, "schema_version", &schema_version) &&
+      schema_version == "simai.target.workload/v1" &&
+      StringMember(target_workload, "composition", &composition) &&
+      composition == "SHA256_NEWLINE_DELIMITED_RESOURCE_DIGESTS_V1" &&
+      StringMember(target_workload, "sha256", &composite_digest) &&
+      IsSha256Identifier(composite_digest);
+  for (const std::string& resource_name : resource_names) {
+    const JsonValue* reference = Member(target_workload, resource_name);
+    std::string path;
+    std::string digest;
+    valid = valid && reference != nullptr &&
+        ObjectHasExactKeys(*reference, {"path", "sha256"}) &&
+        ParseArtifactReference(*reference, &path, &digest);
+  }
+  if (!valid) {
+    Reject(
+        contract,
+        "TARGET_WORKLOAD_SCHEMA_INVALID",
+        "The Target Workload composition envelope is invalid.",
+        "Use the exact v1 envelope and immutable resource references.");
+  }
+  return valid;
+}
+
 struct ValidatedTargetModel {
   uint64_t logical_trainable_parameters = 0;
+  uint64_t checkpoint_auxiliary_elements = 0;
+  uint64_t checkpoint_quant_scale_elements = 0;
+  uint64_t checkpoint_routing_table_elements = 0;
   uint64_t checkpoint_storage_bytes = 0;
   uint64_t active_main_blocks_parameters = 0;
   uint64_t active_main_forward_parameters = 0;
@@ -985,25 +1112,77 @@ struct ValidatedTargetModel {
   std::string field_readiness;
 };
 
+bool TargetEvidenceHasExactShape(
+    const JsonValue& spec,
+    const std::string& condition_key) {
+  const JsonValue* evidence = Member(spec, "evidence");
+  if (evidence == nullptr || evidence->type != JsonValue::Type::Array ||
+      evidence->array.empty()) {
+    return false;
+  }
+  for (const JsonValue& record : evidence->array) {
+    const JsonValue* source = Member(record, "source");
+    const JsonValue* method = Member(record, "method");
+    const JsonValue* conditions = Member(record, "conditions");
+    const JsonValue* condition = conditions == nullptr
+        ? nullptr
+        : Member(*conditions, condition_key);
+    if (!ObjectHasExactKeys(
+            record,
+            {"id",
+             "class",
+             "readiness",
+             "source",
+             "method",
+             "asOf",
+             "conditions",
+             "sanitization"}) ||
+        source == nullptr ||
+        !ObjectHasExactKeys(*source, {"uri", "ref"}) || method == nullptr ||
+        !ObjectHasExactKeys(*method, {"name", "version"}) ||
+        conditions == nullptr ||
+        !ObjectHasExactKeys(*conditions, {condition_key}) ||
+        condition == nullptr || condition->type != JsonValue::Type::Boolean) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool ValidateTargetResourceEvidence(
     const JsonValue& spec,
     std::string* evidence_level,
     std::string* field_readiness) {
-  std::map<std::string, std::string> evidence_classes;
-  if (!StringMember(spec, "evidenceClass", evidence_level) ||
+  std::string evidence_ref;
+  const JsonValue* evidence = Member(spec, "evidence");
+  if (!StringMember(spec, "evidenceRef", &evidence_ref) ||
+      evidence_ref.empty() ||
+      !StringMember(spec, "evidenceClass", evidence_level) ||
       !StringMember(spec, "readiness", field_readiness) ||
       (*field_readiness != "FIELD_UNVERIFIED" &&
        *field_readiness != "FIELD_VERIFIED") ||
-      !BuildEvidenceClassIndex(spec, &evidence_classes)) {
+      evidence == nullptr || evidence->type != JsonValue::Type::Array ||
+      evidence->array.size() != 1U) {
     return false;
   }
-  bool matching_class = false;
-  for (const auto& evidence : evidence_classes) {
-    matching_class = matching_class || evidence.second == *evidence_level;
+
+  const JsonValue& record = evidence->array.front();
+  std::string record_id;
+  std::string record_class;
+  std::string record_readiness;
+  if (!EvidenceRecordIsComplete(record) ||
+      !StringMember(record, "id", &record_id) ||
+      record_id != evidence_ref ||
+      !StringMember(record, "class", &record_class) ||
+      record_class != *evidence_level ||
+      !StringMember(record, "readiness", &record_readiness) ||
+      (record_readiness != "FIELD_UNVERIFIED" &&
+       record_readiness != "FIELD_VERIFIED") ||
+      record_readiness != *field_readiness) {
+    return false;
   }
-  return matching_class &&
-      !(*field_readiness == "FIELD_UNVERIFIED" &&
-        *evidence_level == "MEASURED");
+  return !(*field_readiness == "FIELD_UNVERIFIED" &&
+           *evidence_level == "MEASURED");
 }
 
 bool SafeMultiplyAdd(
@@ -1029,6 +1208,71 @@ bool SafeMultiply(uint64_t left, uint64_t right, uint64_t* product) {
   return true;
 }
 
+bool PositiveUint64Value(const JsonValue& value, uint64_t* parsed_value) {
+  const uint64_t maximum_exact_json_integer = 9007199254740991ULL;
+  return ExactUnsignedDecimal(
+      value, maximum_exact_json_integer, false, parsed_value);
+}
+
+bool PositiveShapeProduct(
+    const JsonValue& shape,
+    uint64_t* product,
+    std::string* canonical = nullptr) {
+  if (shape.type != JsonValue::Type::Array || shape.array.empty()) {
+    return false;
+  }
+  uint64_t accumulated = 1U;
+  std::ostringstream canonical_shape;
+  for (size_t index = 0U; index < shape.array.size(); ++index) {
+    const JsonValue& dimension = shape.array[index];
+    uint64_t parsed_dimension = 0U;
+    uint64_t next = 0U;
+    if (!PositiveUint64Value(dimension, &parsed_dimension) ||
+        !SafeMultiply(accumulated, parsed_dimension, &next)) {
+      return false;
+    }
+    accumulated = next;
+    if (index != 0U) {
+      canonical_shape << ',';
+    }
+    canonical_shape << parsed_dimension;
+  }
+  *product = accumulated;
+  if (canonical != nullptr) {
+    *canonical = canonical_shape.str();
+  }
+  return true;
+}
+
+bool StringIsOneOf(
+    const std::string& value,
+    const std::vector<std::string>& allowed) {
+  return std::find(allowed.begin(), allowed.end(), value) != allowed.end();
+}
+
+bool CheckpointStorageDtypeBytes(
+    const std::string& dtype,
+    uint64_t* bytes) {
+  if (dtype == "F8_E4M3" || dtype == "F8_E8M0" ||
+      dtype == "PACKED_FP4_I8") {
+    *bytes = 1U;
+    return true;
+  }
+  if (dtype == "BF16") {
+    *bytes = 2U;
+    return true;
+  }
+  if (dtype == "F32") {
+    *bytes = 4U;
+    return true;
+  }
+  if (dtype == "I64") {
+    *bytes = 8U;
+    return true;
+  }
+  return false;
+}
+
 bool ValidateTargetModel(
     const JsonValue& model,
     AnalyticalRunContract* contract,
@@ -1036,11 +1280,14 @@ bool ValidateTargetModel(
   std::string api_version;
   std::string kind;
   std::string schema_semver;
+  std::string metadata_id;
   std::string source_repository;
   std::string source_commit;
   std::string source_header_digest;
-  std::string tensor_representation;
+  std::string registry_representation;
+  std::string declared_registry_digest;
   std::string active_unit;
+  std::string auxiliary_unit;
   std::string checkpoint_unit;
   std::string checkpoint_semantics;
   int hidden_size = 0;
@@ -1048,28 +1295,87 @@ bool ValidateTargetModel(
   int mtp_moe_layers = 0;
   int hash_routed_main_layers = 0;
   int baseline_routed_experts = 0;
-  uint64_t declared_logical_parameters = 0;
+  uint64_t declared_logical_parameters = 0U;
+  uint64_t declared_active_main = 0U;
+  uint64_t declared_active_forward = 0U;
+  uint64_t declared_active_training = 0U;
+  uint64_t declared_quant_scale_elements = 0U;
+  uint64_t declared_routing_table_elements = 0U;
+  uint64_t declared_auxiliary_elements = 0U;
+  uint64_t declared_checkpoint_bytes = 0U;
+
   const JsonValue* metadata = Member(model, "metadata");
   const JsonValue* spec = Member(model, "spec");
   const JsonValue* source = spec == nullptr ? nullptr : Member(*spec, "source");
   const JsonValue* architecture =
       spec == nullptr ? nullptr : Member(*spec, "architecture");
-  const JsonValue* tensor_manifest =
-      spec == nullptr ? nullptr : Member(*spec, "tensorManifest");
-  const JsonValue* groups =
-      tensor_manifest == nullptr ? nullptr : Member(*tensor_manifest, "groups");
+  const JsonValue* registry =
+      spec == nullptr ? nullptr : Member(*spec, "tensorRegistry");
+  const JsonValue* entries =
+      registry == nullptr ? nullptr : Member(*registry, "entries");
   const JsonValue* active =
       spec == nullptr ? nullptr : Member(*spec, "activeLogicalParameters");
+  const JsonValue* auxiliary =
+      spec == nullptr ? nullptr : Member(*spec, "checkpointAuxiliaryElements");
   const JsonValue* checkpoint =
       spec == nullptr ? nullptr : Member(*spec, "checkpointStorage");
-  if (!StringMember(model, "apiVersion", &api_version) ||
+
+  if (!ObjectHasExactKeys(
+          model,
+          {"apiVersion", "kind", "schemaSemver", "metadata", "spec"}) ||
+      !StringMember(model, "apiVersion", &api_version) ||
       api_version != "simai.target.model/v1alpha1" ||
       !StringMember(model, "kind", &kind) || kind != "ModelManifest" ||
       !StringMember(model, "schemaSemver", &schema_semver) ||
       schema_semver != "0.1.0" || metadata == nullptr ||
-      spec == nullptr || source == nullptr || architecture == nullptr ||
-      tensor_manifest == nullptr || groups == nullptr || active == nullptr ||
-      checkpoint == nullptr || groups->type != JsonValue::Type::Array ||
+      !ObjectHasExactKeys(*metadata, {"id"}) ||
+      !StringMember(*metadata, "id", &metadata_id) ||
+      metadata_id != "deepseek-v4-pro-target-10t" || spec == nullptr ||
+      !ObjectHasExactKeys(
+          *spec,
+          {"source",
+           "architecture",
+           "tensorRegistry",
+           "logicalTrainableParameters",
+           "activeLogicalParameters",
+           "checkpointStorage",
+           "evidenceRef",
+           "evidenceClass",
+           "readiness",
+           "evidence",
+           "checkpointAuxiliaryElements"}) ||
+      source == nullptr ||
+      !ObjectHasExactKeys(
+          *source, {"repository", "commit", "officialHeaderDigest"}) ||
+      architecture == nullptr ||
+      !ObjectHasExactKeys(
+          *architecture,
+          {"hiddenSize",
+           "mainMoeLayers",
+           "mtpMoeLayers",
+           "hashRoutedMainLayers",
+           "baselineRoutedExperts",
+           "routedExperts",
+           "topK",
+           "expertIntermediateSize",
+           "sharedExperts"}) ||
+      registry == nullptr ||
+      !ObjectHasExactKeys(
+          *registry, {"representation", "canonicalDigest", "entries"}) ||
+      entries == nullptr || entries->type != JsonValue::Type::Array ||
+      active == nullptr ||
+      !ObjectHasExactKeys(
+          *active,
+          {"mainBlocksOnly",
+           "mainForwardIncludingIo",
+           "trainingGraphIncludingMtp",
+           "unit"}) ||
+      auxiliary == nullptr ||
+      !ObjectHasExactKeys(
+          *auxiliary, {"quantScale", "routingTable", "total", "unit"}) ||
+      checkpoint == nullptr ||
+      !ObjectHasExactKeys(*checkpoint, {"value", "unit", "semantics"}) ||
+      !TargetEvidenceHasExactShape(*spec, "tensorDataDownloaded") ||
       !StringMember(*source, "repository", &source_repository) ||
       source_repository != "deepseek-ai/DeepSeek-V4-Pro" ||
       !StringMember(*source, "commit", &source_commit) ||
@@ -1077,46 +1383,52 @@ bool ValidateTargetModel(
       !StringMember(*source, "officialHeaderDigest", &source_header_digest) ||
       source_header_digest !=
           "sha256:a3a39b9ccb4e729851922fc9c770f5c5755e7b9d7e96cd02c23f0e12b5e25cb9" ||
-      !PositiveIntMember(*architecture, "hiddenSize", &hidden_size) ||
-      !PositiveIntMember(*architecture, "mainMoeLayers", &main_moe_layers) ||
-      !PositiveIntMember(*architecture, "mtpMoeLayers", &mtp_moe_layers) ||
-      !PositiveIntMember(
+      !ExactPositiveIntMember(*architecture, "hiddenSize", &hidden_size) ||
+      !ExactPositiveIntMember(
+          *architecture, "mainMoeLayers", &main_moe_layers) ||
+      !ExactPositiveIntMember(
+          *architecture, "mtpMoeLayers", &mtp_moe_layers) ||
+      !ExactPositiveIntMember(
           *architecture, "hashRoutedMainLayers", &hash_routed_main_layers) ||
-      !PositiveIntMember(
+      !ExactPositiveIntMember(
           *architecture,
           "baselineRoutedExperts",
           &baseline_routed_experts) ||
-      !PositiveIntMember(
+      !ExactPositiveIntMember(
           *architecture, "routedExperts", &validated->routed_experts) ||
-      !PositiveIntMember(*architecture, "topK", &validated->top_k) ||
-      !PositiveIntMember(
+      !ExactPositiveIntMember(*architecture, "topK", &validated->top_k) ||
+      !ExactPositiveIntMember(
           *architecture,
           "expertIntermediateSize",
           &validated->expert_intermediate_size) ||
-      !PositiveIntMember(
+      !ExactPositiveIntMember(
           *architecture, "sharedExperts", &validated->shared_experts) ||
+      !StringMember(*registry, "representation", &registry_representation) ||
+      registry_representation != "CANONICAL_TENSOR_TYPE_REGISTRY_V1" ||
       !StringMember(
-          *tensor_manifest, "representation", &tensor_representation) ||
-      tensor_representation != "VERIFIED_TENSOR_GROUPS_V1" ||
-      !PositiveUint64Member(
+          *registry, "canonicalDigest", &declared_registry_digest) ||
+      !IsSha256Identifier(declared_registry_digest) ||
+      !ExactPositiveUint64Member(
           *spec,
           "logicalTrainableParameters",
           &declared_logical_parameters) ||
-      !PositiveUint64Member(
-          *active,
-          "mainBlocksOnly",
-          &validated->active_main_blocks_parameters) ||
-      !PositiveUint64Member(
-          *active,
-          "mainForwardIncludingIo",
-          &validated->active_main_forward_parameters) ||
-      !PositiveUint64Member(
-          *active,
-          "trainingGraphIncludingMtp",
-          &validated->active_training_graph_parameters) ||
+      !ExactPositiveUint64Member(
+          *active, "mainBlocksOnly", &declared_active_main) ||
+      !ExactPositiveUint64Member(
+          *active, "mainForwardIncludingIo", &declared_active_forward) ||
+      !ExactPositiveUint64Member(
+          *active, "trainingGraphIncludingMtp", &declared_active_training) ||
       !StringMember(*active, "unit", &active_unit) || active_unit != "count" ||
-      !PositiveUint64Member(
-          *checkpoint, "value", &validated->checkpoint_storage_bytes) ||
+      !ExactPositiveUint64Member(
+          *auxiliary, "quantScale", &declared_quant_scale_elements) ||
+      !ExactPositiveUint64Member(
+          *auxiliary, "routingTable", &declared_routing_table_elements) ||
+      !ExactPositiveUint64Member(
+          *auxiliary, "total", &declared_auxiliary_elements) ||
+      !StringMember(*auxiliary, "unit", &auxiliary_unit) ||
+      auxiliary_unit != "count" ||
+      !ExactPositiveUint64Member(
+          *checkpoint, "value", &declared_checkpoint_bytes) ||
       !StringMember(*checkpoint, "unit", &checkpoint_unit) ||
       checkpoint_unit != "B" ||
       !StringMember(*checkpoint, "semantics", &checkpoint_semantics) ||
@@ -1130,73 +1442,244 @@ bool ValidateTargetModel(
         contract,
         "TARGET_MODEL_SCHEMA_INVALID",
         "The Target Model Manifest schema or evidence is invalid.",
-        "Provide the frozen public v1alpha1 Target Model Manifest.");
+        "Provide the exact public v1alpha1 Target Model Manifest.");
     return false;
   }
 
-  struct ExpectedGroup {
-    uint64_t instances;
-    uint64_t elements;
-    const char* scope;
-  };
-  const std::map<std::string, ExpectedGroup> expected_groups = {
-      {"official-baseline-logical-trainable",
-       {1U, 1598837347742ULL, "BASELINE_ALL"}},
-      {"added-routed-expert-weights",
-       {103168U, 66060288U, "MAIN_AND_MTP_MOE"}},
-      {"added-router-weights", {103168U, 7168U, "MAIN_AND_MTP_MOE"}},
-      {"added-non-hash-router-biases",
-       {98176U, 1U, "NON_HASH_MAIN_AND_MTP_MOE"}}};
-  std::map<std::string, bool> observed_groups;
+  const std::vector<std::string> allowed_logical_dtypes = {
+      "BF16", "F32", "F8_E4M3", "F8_E8M0", "FP4", "I64"};
+  const std::vector<std::string> allowed_scopes = {
+      "GLOBAL", "MAIN_BLOCK", "MTP_BLOCK"};
+  const std::vector<std::string> allowed_kinds = {
+      "ATTENTION",
+      "ATTENTION_INDEXER",
+      "EMBEDDING",
+      "HEAD",
+      "HYPERCONNECTION",
+      "MTP_PROJECTION",
+      "NORM",
+      "QUANT_SCALE",
+      "ROUTED_EXPERT",
+      "ROUTER",
+      "ROUTING_TABLE",
+      "SHARED_EXPERT"};
+
+  std::map<std::string, bool> observed_ids;
+  std::ostringstream canonical_registry;
+  uint64_t tensor_instances = 0U;
   uint64_t computed_logical_parameters = 0U;
-  bool groups_valid = groups->array.size() == expected_groups.size();
-  for (const JsonValue& group : groups->array) {
+  uint64_t computed_checkpoint_bytes = 0U;
+  uint64_t computed_auxiliary_elements = 0U;
+  uint64_t computed_quant_scale_elements = 0U;
+  uint64_t computed_routing_table_elements = 0U;
+  uint64_t global_non_routed = 0U;
+  uint64_t main_non_routed = 0U;
+  uint64_t main_routed = 0U;
+  uint64_t mtp_non_routed = 0U;
+  uint64_t mtp_routed = 0U;
+  bool registry_valid = entries->array.size() == 76U;
+
+  for (const JsonValue& entry : entries->array) {
     std::string id;
+    std::string logical_dtype;
+    std::string storage_dtype;
     std::string role;
     std::string scope;
+    std::string tensor_kind;
     uint64_t instances = 0U;
-    uint64_t elements = 0U;
-    if (!StringMember(group, "id", &id) ||
-        !StringMember(group, "trainableRole", &role) ||
-        role != "LOGICAL_TRAINABLE" ||
-        !StringMember(group, "blockScope", &scope) ||
-        !PositiveUint64Member(group, "instances", &instances) ||
-        !PositiveUint64Member(
-            group, "logicalElementsPerInstance", &elements) ||
-        expected_groups.count(id) != 1U || observed_groups.count(id) != 0U) {
-      groups_valid = false;
+    uint64_t logical_elements_per_instance = 0U;
+    uint64_t storage_elements_per_instance = 0U;
+    uint64_t logical_elements = 0U;
+    uint64_t storage_elements = 0U;
+    uint64_t storage_dtype_bytes = 0U;
+    uint64_t storage_bytes = 0U;
+    std::string logical_shape_text;
+    std::string storage_shape_text;
+    const JsonValue* logical_shape = Member(entry, "logicalShape");
+    const JsonValue* storage_shape =
+        Member(entry, "checkpointStorageShape");
+
+    if (!ObjectHasExactKeys(
+            entry,
+            {"id",
+             "instances",
+             "logicalShape",
+             "checkpointStorageShape",
+             "logicalDtype",
+             "checkpointStorageDtype",
+             "trainableRole",
+             "blockScope",
+             "tensorKind"}) ||
+        !StringMember(entry, "id", &id) || id.empty() ||
+        observed_ids.count(id) != 0U ||
+        !ExactPositiveUint64Member(entry, "instances", &instances) ||
+        logical_shape == nullptr ||
+        !PositiveShapeProduct(
+            *logical_shape,
+            &logical_elements_per_instance,
+            &logical_shape_text) ||
+        storage_shape == nullptr ||
+        !PositiveShapeProduct(
+            *storage_shape,
+            &storage_elements_per_instance,
+            &storage_shape_text) ||
+        !StringMember(entry, "logicalDtype", &logical_dtype) ||
+        !StringIsOneOf(logical_dtype, allowed_logical_dtypes) ||
+        !StringMember(
+            entry, "checkpointStorageDtype", &storage_dtype) ||
+        !CheckpointStorageDtypeBytes(storage_dtype, &storage_dtype_bytes) ||
+        !StringMember(entry, "trainableRole", &role) ||
+        (role != "LOGICAL_TRAINABLE" &&
+         role != "CHECKPOINT_AUXILIARY") ||
+        !StringMember(entry, "blockScope", &scope) ||
+        !StringIsOneOf(scope, allowed_scopes) ||
+        !StringMember(entry, "tensorKind", &tensor_kind) ||
+        !StringIsOneOf(tensor_kind, allowed_kinds) ||
+        !SafeMultiply(
+            logical_elements_per_instance, instances, &logical_elements) ||
+        !SafeMultiply(
+            storage_elements_per_instance, instances, &storage_elements) ||
+        !SafeMultiply(
+            storage_elements, storage_dtype_bytes, &storage_bytes) ||
+        !SafeMultiplyAdd(instances, 1U, &tensor_instances) ||
+        !SafeMultiplyAdd(storage_bytes, 1U, &computed_checkpoint_bytes)) {
+      registry_valid = false;
       break;
     }
-    const ExpectedGroup& expected = expected_groups.at(id);
-    if (instances != expected.instances || elements != expected.elements ||
-        scope != expected.scope ||
-        !SafeMultiplyAdd(instances, elements, &computed_logical_parameters)) {
-      groups_valid = false;
+
+    uint64_t doubled_storage_elements = 0U;
+    const bool fp4_shape_is_closed =
+        logical_dtype == "FP4" &&
+        storage_dtype == "PACKED_FP4_I8" &&
+        SafeMultiply(storage_elements_per_instance, 2U, &doubled_storage_elements) &&
+        doubled_storage_elements == logical_elements_per_instance;
+    const bool ordinary_shape_is_closed =
+        logical_dtype != "FP4" && logical_dtype == storage_dtype &&
+        logical_elements_per_instance == storage_elements_per_instance;
+    const bool auxiliary_kind =
+        tensor_kind == "QUANT_SCALE" || tensor_kind == "ROUTING_TABLE";
+    if ((!fp4_shape_is_closed && !ordinary_shape_is_closed) ||
+        (role == "CHECKPOINT_AUXILIARY") != auxiliary_kind) {
+      registry_valid = false;
       break;
     }
-    observed_groups[id] = true;
+
+    if (role == "LOGICAL_TRAINABLE") {
+      if (!SafeMultiplyAdd(logical_elements, 1U, &computed_logical_parameters)) {
+        registry_valid = false;
+        break;
+      }
+      uint64_t* scoped_total = nullptr;
+      if (scope == "GLOBAL") {
+        scoped_total = &global_non_routed;
+      } else if (scope == "MAIN_BLOCK") {
+        scoped_total =
+            tensor_kind == "ROUTED_EXPERT" ? &main_routed : &main_non_routed;
+      } else {
+        scoped_total =
+            tensor_kind == "ROUTED_EXPERT" ? &mtp_routed : &mtp_non_routed;
+      }
+      if (!SafeMultiplyAdd(logical_elements, 1U, scoped_total)) {
+        registry_valid = false;
+        break;
+      }
+    } else {
+      if (!SafeMultiplyAdd(
+              storage_elements, 1U, &computed_auxiliary_elements)) {
+        registry_valid = false;
+        break;
+      }
+      uint64_t* auxiliary_total = tensor_kind == "QUANT_SCALE"
+          ? &computed_quant_scale_elements
+          : &computed_routing_table_elements;
+      if (!SafeMultiplyAdd(storage_elements, 1U, auxiliary_total)) {
+        registry_valid = false;
+        break;
+      }
+    }
+
+    canonical_registry
+        << id << '|' << instances << '|' << logical_shape_text << '|'
+        << storage_shape_text << '|' << logical_dtype << '|' << storage_dtype
+        << '|' << role << '|' << scope << '|' << tensor_kind << '\n';
+    observed_ids[id] = true;
   }
-  if (!groups_valid || observed_groups.size() != expected_groups.size() ||
-      hidden_size != 7168 || main_moe_layers != 61 ||
+
+  const std::string computed_registry_digest =
+      "sha256:" + Sha256Hex(canonical_registry.str());
+  uint64_t active_main_routed = 0U;
+  uint64_t active_mtp_routed = 0U;
+  uint64_t computed_active_main = 0U;
+  uint64_t computed_active_forward = 0U;
+  uint64_t computed_active_training = 0U;
+  registry_valid = registry_valid && observed_ids.size() == 76U &&
+      main_routed % 2048U == 0U && mtp_routed % 2048U == 0U &&
+      SafeMultiply(main_routed / 2048U, 16U, &active_main_routed) &&
+      SafeMultiply(mtp_routed / 2048U, 16U, &active_mtp_routed) &&
+      SafeMultiplyAdd(main_non_routed, 1U, &computed_active_main) &&
+      SafeMultiplyAdd(active_main_routed, 1U, &computed_active_main);
+  computed_active_forward = computed_active_main;
+  registry_valid = registry_valid &&
+      SafeMultiplyAdd(global_non_routed, 1U, &computed_active_forward);
+  computed_active_training = computed_active_forward;
+  registry_valid = registry_valid &&
+      SafeMultiplyAdd(mtp_non_routed, 1U, &computed_active_training) &&
+      SafeMultiplyAdd(active_mtp_routed, 1U, &computed_active_training);
+
+  const std::string frozen_registry_digest =
+      "sha256:f5984772e2fca84aeb8e36786b1273c26576a083cf17dd07a1eb0637e0d9daa2";
+  if (!registry_valid ||
+      declared_registry_digest != frozen_registry_digest ||
+      computed_registry_digest != frozen_registry_digest ||
+      tensor_instances != 764124U ||
+      computed_logical_parameters != 8414884746526ULL ||
+      computed_auxiliary_elements != 262134842368ULL ||
+      computed_quant_scale_elements != 262128636928ULL ||
+      computed_routing_table_elements != 6205440ULL ||
+      computed_checkpoint_bytes != 4486847493752ULL ||
+      computed_active_main != 88950053982ULL ||
+      computed_active_forward != 90803533923ULL ||
+      computed_active_training != 92345423134ULL) {
+    Reject(
+        contract,
+        "TARGET_MODEL_REGISTRY_INVALID",
+        "The canonical tensor-type registry is incomplete or inconsistent.",
+        "Restore the frozen logical/storage shapes, dtypes, roles, and scopes.");
+    return false;
+  }
+  if (hidden_size != 7168 || main_moe_layers != 61 ||
       mtp_moe_layers != 1 || hash_routed_main_layers != 3 ||
       baseline_routed_experts != 384 || validated->routed_experts != 2048 ||
       validated->top_k != 16 ||
       validated->expert_intermediate_size != 3072 ||
       validated->shared_experts != 1 ||
-      computed_logical_parameters != 8414884746526ULL ||
       declared_logical_parameters != computed_logical_parameters ||
-      validated->active_main_blocks_parameters != 88950053982ULL ||
-      validated->active_main_forward_parameters != 90803533923ULL ||
-      validated->active_training_graph_parameters != 92345423134ULL ||
-      validated->checkpoint_storage_bytes != 4486847493752ULL) {
+      declared_auxiliary_elements != computed_auxiliary_elements ||
+      declared_quant_scale_elements != computed_quant_scale_elements ||
+      declared_routing_table_elements != computed_routing_table_elements ||
+      declared_checkpoint_bytes != computed_checkpoint_bytes ||
+      declared_active_main != computed_active_main ||
+      declared_active_forward != computed_active_forward ||
+      declared_active_training != computed_active_training) {
     Reject(
         contract,
         "TARGET_MODEL_IDENTITY_MISMATCH",
         "The Target Model differs from the frozen 10T-scale identity.",
-        "Use 2048 routed experts, TopK 16, width 3072, and one shared expert.");
+        "Restore the frozen architecture and independently computed summaries.");
     return false;
   }
+
   validated->logical_trainable_parameters = computed_logical_parameters;
+  validated->checkpoint_auxiliary_elements =
+      computed_auxiliary_elements;
+  validated->checkpoint_quant_scale_elements =
+      computed_quant_scale_elements;
+  validated->checkpoint_routing_table_elements =
+      computed_routing_table_elements;
+  validated->checkpoint_storage_bytes = computed_checkpoint_bytes;
+  validated->active_main_blocks_parameters = computed_active_main;
+  validated->active_main_forward_parameters = computed_active_forward;
+  validated->active_training_graph_parameters = computed_active_training;
   return true;
 }
 
@@ -1227,7 +1710,14 @@ bool LoadTargetModel(
       "Correct the Model Manifest JSON and retry."};
   LoadedArtifact model_artifact;
   if (!LoadArtifact(
-          *model_reference, model_policy, contract, &model_artifact)) {
+          *model_reference,
+          model_policy,
+          contract,
+          &model_artifact,
+          kMaximumTargetModelArtifactBytes,
+          "TARGET_MODEL_ARTIFACT_TOO_LARGE",
+          "The Target Model Manifest exceeds its byte limit.",
+          "Keep the canonical Target Model Manifest within 256 KiB.")) {
     return false;
   }
   contract->target_model_sha256 = model_artifact.sha256;
@@ -1238,6 +1728,12 @@ bool LoadTargetModel(
   contract->target_model_ready = true;
   contract->target_logical_trainable_parameters =
       model.logical_trainable_parameters;
+  contract->target_checkpoint_auxiliary_elements =
+      model.checkpoint_auxiliary_elements;
+  contract->target_checkpoint_quant_scale_elements =
+      model.checkpoint_quant_scale_elements;
+  contract->target_checkpoint_routing_table_elements =
+      model.checkpoint_routing_table_elements;
   contract->target_checkpoint_storage_bytes = model.checkpoint_storage_bytes;
   contract->target_active_main_blocks_parameters =
       model.active_main_blocks_parameters;
@@ -1276,13 +1772,38 @@ bool ValidateTargetStep(
   std::string referenced_model_digest;
   std::string unit;
   std::string formula;
+  std::string metadata_id;
+  const JsonValue* metadata = Member(step, "metadata");
   const JsonValue* spec = Member(step, "spec");
-  if (!StringMember(step, "apiVersion", &api_version) ||
+  if (!ObjectHasExactKeys(
+          step,
+          {"apiVersion", "kind", "schemaSemver", "metadata", "spec"}) ||
+      !StringMember(step, "apiVersion", &api_version) ||
       api_version != "simai.target.step/v1alpha1" ||
       !StringMember(step, "kind", &kind) ||
       kind != "OptimizerStepManifest" ||
       !StringMember(step, "schemaSemver", &schema_semver) ||
-      schema_semver != "0.1.0" || spec == nullptr ||
+      schema_semver != "0.1.0" || metadata == nullptr ||
+      !ObjectHasExactKeys(*metadata, {"id"}) ||
+      !StringMember(*metadata, "id", &metadata_id) ||
+      metadata_id != "target-500m-global-token-step" || spec == nullptr ||
+      !ObjectHasExactKeys(
+          *spec,
+          {"modelDigest",
+           "sequenceTokens",
+           "microBatchSequences",
+           "dataParallelReplicas",
+           "gradientAccumulation",
+           "configuredGlobalTokens",
+           "globalTokenUnit",
+           "formula",
+           "configuredRoutedAssignmentSlotsUpperBound",
+           "routedLayersInScope",
+           "evidenceRef",
+           "evidenceClass",
+           "readiness",
+           "evidence"}) ||
+      !TargetEvidenceHasExactShape(*spec, "runtimeExecuted") ||
       !StringMember(*spec, "modelDigest", &referenced_model_digest) ||
       !StringMember(*spec, "globalTokenUnit", &unit) || unit != "count" ||
       !StringMember(*spec, "formula", &formula) ||
@@ -1307,17 +1828,17 @@ bool ValidateTargetStep(
         "Bind the Step and Target Workload to the same model digest.");
     return false;
   }
-  if (!PositiveUint64Member(
+  if (!ExactPositiveUint64Member(
           *spec, "sequenceTokens", &validated->sequence_tokens) ||
-      !PositiveUint64Member(
+      !ExactPositiveUint64Member(
           *spec,
           "microBatchSequences",
           &validated->micro_batch_sequences) ||
-      !PositiveUint64Member(
+      !ExactPositiveUint64Member(
           *spec,
           "dataParallelReplicas",
           &validated->data_parallel_replicas) ||
-      !PositiveUint64Member(
+      !ExactPositiveUint64Member(
           *spec,
           "gradientAccumulation",
           &validated->gradient_accumulation)) {
@@ -1350,7 +1871,8 @@ bool ValidateTargetStep(
     return false;
   }
   uint64_t declared_gts = 0U;
-  if (!PositiveUint64Member(*spec, "configuredGlobalTokens", &declared_gts) ||
+  if (!ExactPositiveUint64Member(
+          *spec, "configuredGlobalTokens", &declared_gts) ||
       declared_gts != validated->configured_gts) {
     Reject(
         contract,
@@ -1370,9 +1892,10 @@ bool ValidateTargetStep(
   uint64_t routed_layers = 0U;
   uint64_t declared_assignment_slots = 0U;
   uint64_t gts_times_top_k = 0U;
-  if (!PositiveUint64Member(*spec, "routedLayersInScope", &routed_layers) ||
+  if (!ExactPositiveUint64Member(
+          *spec, "routedLayersInScope", &routed_layers) ||
       routed_layers != 62U ||
-      !PositiveUint64Member(
+      !ExactPositiveUint64Member(
           *spec,
           "configuredRoutedAssignmentSlotsUpperBound",
           &declared_assignment_slots) ||
@@ -1419,7 +1942,14 @@ bool LoadTargetStep(
       "Correct the Step Manifest JSON and retry."};
   LoadedArtifact step_artifact;
   if (!LoadArtifact(
-          *step_reference, step_policy, contract, &step_artifact)) {
+          *step_reference,
+          step_policy,
+          contract,
+          &step_artifact,
+          kMaximumTargetStepArtifactBytes,
+          "TARGET_STEP_ARTIFACT_TOO_LARGE",
+          "The Target Step Manifest exceeds its byte limit.",
+          "Keep the canonical Target Step Manifest within 64 KiB.")) {
     return false;
   }
   contract->target_step_sha256 = step_artifact.sha256;
@@ -1460,24 +1990,51 @@ bool ValidateTargetRouting(
   std::string step_digest;
   std::string mode;
   std::string counts;
+  std::string metadata_id;
   int routed_experts = 0;
   int top_k = 0;
   int hash_layers = 0;
+  const JsonValue* metadata = Member(routing, "metadata");
   const JsonValue* spec = Member(routing, "spec");
   const JsonValue* policy = spec == nullptr ? nullptr : Member(*spec, "policy");
-  if (!StringMember(routing, "apiVersion", &api_version) ||
+  if (!ObjectHasExactKeys(
+          routing,
+          {"apiVersion", "kind", "schemaSemver", "metadata", "spec"}) ||
+      !StringMember(routing, "apiVersion", &api_version) ||
       api_version != "simai.target.routing/v1alpha1" ||
       !StringMember(routing, "kind", &kind) ||
       kind != "TargetRoutingArtifact" ||
       !StringMember(routing, "schemaSemver", &schema_semver) ||
-      schema_semver != "0.1.0" || spec == nullptr || policy == nullptr ||
+      schema_semver != "0.1.0" || metadata == nullptr ||
+      !ObjectHasExactKeys(*metadata, {"id"}) ||
+      !StringMember(*metadata, "id", &metadata_id) ||
+      metadata_id != "target-hash-then-topk-routing" || spec == nullptr ||
+      policy == nullptr ||
+      !ObjectHasExactKeys(
+          *spec,
+          {"modelDigest",
+           "stepDigest",
+           "policy",
+           "evidenceRef",
+           "evidenceClass",
+           "readiness",
+           "evidence"}) ||
+      !ObjectHasExactKeys(
+          *policy,
+          {"mode",
+           "routedExperts",
+           "topK",
+           "hashRoutedMainLayers",
+           "counts"}) ||
+      !TargetEvidenceHasExactShape(*spec, "observedCountsAvailable") ||
       !StringMember(*spec, "modelDigest", &model_digest) ||
       !StringMember(*spec, "stepDigest", &step_digest) ||
       !StringMember(*policy, "mode", &mode) ||
       mode != "HASH_FIRST_THREE_THEN_TOPK" ||
-      !PositiveIntMember(*policy, "routedExperts", &routed_experts) ||
-      !PositiveIntMember(*policy, "topK", &top_k) ||
-      !PositiveIntMember(*policy, "hashRoutedMainLayers", &hash_layers) ||
+      !ExactPositiveIntMember(*policy, "routedExperts", &routed_experts) ||
+      !ExactPositiveIntMember(*policy, "topK", &top_k) ||
+      !ExactPositiveIntMember(
+          *policy, "hashRoutedMainLayers", &hash_layers) ||
       !StringMember(*policy, "counts", &counts) ||
       counts != "SYMBOLIC_UNMATERIALIZED" ||
       !ValidateTargetResourceEvidence(
@@ -1489,19 +2046,6 @@ bool ValidateTargetRouting(
         "TARGET_ROUTING_SCHEMA_INVALID",
         "The Target Routing Artifact schema or evidence is invalid.",
         "Provide the v1alpha1 external hash-then-TopK routing artifact.");
-    return false;
-  }
-  if (Member(*spec, "projectedA2ATraffic") != nullptr ||
-      Member(*spec, "domainPairBytes") != nullptr ||
-      Member(*spec, "topologyResourceLoads") != nullptr ||
-      Member(*policy, "projectedA2ATraffic") != nullptr ||
-      Member(*policy, "domainPairBytes") != nullptr ||
-      Member(*policy, "topologyResourceLoads") != nullptr) {
-    Reject(
-        contract,
-        "TARGET_ROUTING_PROJECTED_A2A_FORBIDDEN",
-        "Projected A2A traffic is outside the Target Routing Artifact.",
-        "Keep routing policy external; derive Projected A2A in its own ticket.");
     return false;
   }
   if (model_digest != loaded_contract.target_model_sha256) {
@@ -1558,7 +2102,14 @@ bool LoadTargetRouting(
       "Correct the Routing Artifact JSON and retry."};
   LoadedArtifact routing_artifact;
   if (!LoadArtifact(
-          *routing_reference, routing_policy, contract, &routing_artifact)) {
+          *routing_reference,
+          routing_policy,
+          contract,
+          &routing_artifact,
+          kMaximumTargetRoutingArtifactBytes,
+          "TARGET_ROUTING_ARTIFACT_TOO_LARGE",
+          "The Target Routing Artifact exceeds its byte limit.",
+          "Keep the symbolic Target Routing Artifact within 64 KiB.")) {
     return false;
   }
   contract->target_routing_sha256 = routing_artifact.sha256;
@@ -1597,6 +2148,28 @@ uint64_t FloorPercent(uint64_t value, uint64_t percent) {
   return (value / 100U) * percent + ((value % 100U) * percent) / 100U;
 }
 
+bool TargetMemoryComponentsHaveExactShape(const JsonValue& components) {
+  if (components.type != JsonValue::Type::Array) {
+    return false;
+  }
+  for (const JsonValue& component : components.array) {
+    const std::vector<std::string> symbolic_keys = {
+        "category", "allocateAt", "releaseAt", "expression", "requires"};
+    const std::vector<std::string> materialized_keys = {
+        "category",
+        "allocateAt",
+        "releaseAt",
+        "expression",
+        "requires",
+        "peakBytes"};
+    if (!ObjectHasExactKeys(component, symbolic_keys) &&
+        !ObjectHasExactKeys(component, materialized_keys)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool ValidateTargetMemoryPlan(
     const JsonValue& memory,
     const AnalyticalRunContract& loaded_contract,
@@ -1610,6 +2183,8 @@ bool ValidateTargetMemoryPlan(
   std::string routing_digest;
   std::string unit;
   std::string aggregation;
+  std::string metadata_id;
+  const JsonValue* metadata = Member(memory, "metadata");
   const JsonValue* spec = Member(memory, "spec");
   const JsonValue* bindings =
       spec == nullptr ? nullptr : Member(*spec, "bindings");
@@ -1617,15 +2192,52 @@ bool ValidateTargetMemoryPlan(
       spec == nullptr ? nullptr : Member(*spec, "components");
   const JsonValue* capacity =
       spec == nullptr ? nullptr : Member(*spec, "capacity");
-  if (!StringMember(memory, "apiVersion", &api_version) ||
+  if (!ObjectHasExactKeys(
+          memory,
+          {"apiVersion", "kind", "schemaSemver", "metadata", "spec"}) ||
+      !StringMember(memory, "apiVersion", &api_version) ||
       api_version != "simai.target.memory/v1alpha1" ||
       !StringMember(memory, "kind", &kind) ||
       kind != "SymbolicMemoryEventPlan" ||
       !StringMember(memory, "schemaSemver", &schema_semver) ||
-      schema_semver != "0.1.0" || spec == nullptr || bindings == nullptr ||
+      schema_semver != "0.1.0" || metadata == nullptr ||
+      !ObjectHasExactKeys(*metadata, {"id"}) ||
+      !StringMember(*metadata, "id", &metadata_id) ||
+      metadata_id != "target-symbolic-training-memory" || spec == nullptr ||
+      !ObjectHasExactKeys(
+          *spec,
+          {"modelDigest",
+           "stepDigest",
+           "routingDigest",
+           "unit",
+           "aggregation",
+           "bindings",
+           "components",
+           "capacity",
+           "evidenceRef",
+           "evidenceClass",
+           "readiness",
+           "evidence"}) ||
+      bindings == nullptr ||
       bindings->type != JsonValue::Type::Object || components == nullptr ||
       components->type != JsonValue::Type::Array || capacity == nullptr ||
       capacity->type != JsonValue::Type::Object ||
+      !ObjectHasExactKeys(
+          *bindings,
+          {"precision",
+           "optimizer",
+           "placement",
+           "recomputation",
+           "runtime"}) ||
+      !TargetMemoryComponentsHaveExactShape(*components) ||
+      !ObjectHasExactKeys(
+          *capacity,
+          {"baseHbmB",
+           "reserveHbmB",
+           "scenarioUsableHbmB",
+           "plannedPeakHbmB",
+           "observedExecutionPeakHbmB"}) ||
+      !TargetEvidenceHasExactShape(*spec, "materializationPoliciesBound") ||
       !StringMember(*spec, "modelDigest", &model_digest) ||
       !StringMember(*spec, "stepDigest", &step_digest) ||
       !StringMember(*spec, "routingDigest", &routing_digest) ||
@@ -1667,6 +2279,7 @@ bool ValidateTargetMemoryPlan(
     const JsonValue* binding = Member(*bindings, binding_name);
     std::string digest;
     if (binding == nullptr || binding->type != JsonValue::Type::Object ||
+        !ObjectHasExactKeys(*binding, {"state", "sha256"}) ||
         !StringMember(*binding, "state", &binding_state) ||
         binding_state != "BOUND" ||
         !StringMember(*binding, "sha256", &digest) ||
@@ -1767,7 +2380,8 @@ bool ValidateTargetMemoryPlan(
     }
     if (validated->materialized) {
       uint64_t peak_bytes = 0U;
-      if (!NonNegativeUint64Member(component, "peakBytes", &peak_bytes) ||
+      if (!ExactNonNegativeUint64Member(
+              component, "peakBytes", &peak_bytes) ||
           !SafeMultiplyAdd(peak_bytes, 1U, &validated->peak_bytes)) {
         components_valid = false;
         break;
@@ -1815,13 +2429,13 @@ bool ValidateTargetMemoryPlan(
 
   uint64_t declared_usable_hbm = 0U;
   uint64_t declared_peak = 0U;
-  if (!PositiveUint64Member(
+  if (!ExactPositiveUint64Member(
           *capacity, "baseHbmB", &validated->base_hbm_bytes) ||
-      !NonNegativeUint64Member(
+      !ExactNonNegativeUint64Member(
           *capacity, "reserveHbmB", &validated->reserve_hbm_bytes) ||
-      !PositiveUint64Member(
+      !ExactPositiveUint64Member(
           *capacity, "scenarioUsableHbmB", &declared_usable_hbm) ||
-      !NonNegativeUint64Member(
+      !ExactNonNegativeUint64Member(
           *capacity, "plannedPeakHbmB", &declared_peak) ||
       validated->reserve_hbm_bytes >= validated->base_hbm_bytes ||
       declared_usable_hbm !=
@@ -1859,7 +2473,7 @@ bool ValidateTargetMemoryPlan(
           "Use exactly UNKNOWN until an execution peak is available.");
       return false;
     }
-  } else if (!NonNegativeUint64Member(
+  } else if (!ExactNonNegativeUint64Member(
                  *capacity,
                  "observedExecutionPeakHbmB",
                  &validated->execution_peak_bytes)) {
@@ -1919,7 +2533,14 @@ bool LoadTargetMemoryPlan(
       "Correct the Memory Event Plan JSON and retry."};
   LoadedArtifact memory_artifact;
   if (!LoadArtifact(
-          *memory_reference, memory_policy, contract, &memory_artifact)) {
+          *memory_reference,
+          memory_policy,
+          contract,
+          &memory_artifact,
+          kMaximumTargetMemoryArtifactBytes,
+          "TARGET_MEMORY_ARTIFACT_TOO_LARGE",
+          "The Target Memory Event Plan exceeds its byte limit.",
+          "Keep the canonical Memory Event Plan within 128 KiB.")) {
     return false;
   }
   contract->target_memory_event_plan_sha256 = memory_artifact.sha256;
@@ -1976,12 +2597,10 @@ bool LoadTargetMemoryPlan(
 
 bool ValidateTargetWorkloadComposition(
     const JsonValue& target_workload,
-    const JsonValue& workload,
     AnalyticalRunContract* contract) {
   std::string schema_version;
   std::string composition;
   std::string declared_composite;
-  std::string workload_binding;
   if (!StringMember(target_workload, "schema_version", &schema_version) ||
       schema_version != "simai.target.workload/v1" ||
       !StringMember(target_workload, "composition", &composition) ||
@@ -2010,14 +2629,111 @@ bool ValidateTargetWorkloadComposition(
         "Hash model, step, routing, and memory digests in canonical order.");
     return false;
   }
-  if (!StringMember(workload, "target_workload_sha256", &workload_binding) ||
-      workload_binding != computed_composite) {
+  std::ifstream workload_input(contract->workload_path.c_str());
+  std::string header;
+  std::string layer_count_line;
+  if (!workload_input || !std::getline(workload_input, header) ||
+      !std::getline(workload_input, layer_count_line)) {
     Reject(
         contract,
-        "TARGET_WORKLOAD_BINDING_MISMATCH",
-        "The AICB workload is not bound to this Target Workload digest.",
-        "Set workload.target_workload_sha256 to the composite digest.");
+        "TARGET_AICB_BINDING_INVALID",
+        "The AICB workload header cannot be decoded.",
+        "Provide a complete target-bound AICB workload header.");
     return false;
+  }
+
+  AstraSim::WorkloadLayerRecordFormat record_format;
+  AstraSim::TargetWorkloadEventBinding header_binding;
+  if (!AstraSim::DecodeWorkloadHeader(
+          header, &record_format, &header_binding)) {
+    Reject(
+        contract,
+        "TARGET_AICB_BINDING_INVALID",
+        "The AICB target binding is malformed or incomplete.",
+        "Bind all four resource digests and the composite digest.");
+    return false;
+  }
+  if (!header_binding.present) {
+    Reject(
+        contract,
+        "TARGET_AICB_BINDING_MISSING",
+        "The AICB workload has no Target Workload binding.",
+        "Generate the workload with all target digest metadata.");
+    return false;
+  }
+  AstraSim::TargetWorkloadEventBinding expected_binding;
+  expected_binding.present = true;
+  expected_binding.model_sha256 = contract->target_model_sha256;
+  expected_binding.step_sha256 = contract->target_step_sha256;
+  expected_binding.routing_sha256 = contract->target_routing_sha256;
+  expected_binding.memory_event_plan_sha256 =
+      contract->target_memory_event_plan_sha256;
+  expected_binding.target_workload_sha256 = computed_composite;
+  if (!AstraSim::TargetWorkloadBindingsEqual(
+          header_binding, expected_binding)) {
+    Reject(
+        contract,
+        "TARGET_AICB_BINDING_MISMATCH",
+        "The AICB header is bound to different Target Workload resources.",
+        "Regenerate the workload from the selected four resources.");
+    return false;
+  }
+
+  std::istringstream count_input(layer_count_line);
+  int layer_count = 0;
+  std::string count_suffix;
+  if (!(count_input >> layer_count) || layer_count < 1 ||
+      (count_input >> count_suffix)) {
+    Reject(
+        contract,
+        "TARGET_AICB_EVENT_BINDING_MISSING",
+        "The AICB workload has no decodable target-bound events.",
+        "Provide a positive exact layer count and bound event records.");
+    return false;
+  }
+  for (int layer = 0; layer < layer_count; ++layer) {
+    std::string layer_line;
+    if (!std::getline(workload_input, layer_line)) {
+      Reject(
+          contract,
+          "TARGET_AICB_EVENT_BINDING_MISSING",
+          "A declared AICB event record is missing.",
+          "Emit one fully bound event record per declared layer.");
+      return false;
+    }
+    std::istringstream layer_input(layer_line);
+    AstraSim::DecodedWorkloadLayerRecord record;
+    std::string suffix;
+    if (!AstraSim::DecodeWorkloadLayerRecord(
+            layer_input, record_format, &record) ||
+        (layer_input >> suffix)) {
+      Reject(
+          contract,
+          "TARGET_AICB_EVENT_BINDING_MISSING",
+          "An AICB event lacks an exact five-digest target binding.",
+          "Propagate the target binding to every AICB event.");
+      return false;
+    }
+    if (!AstraSim::TargetWorkloadBindingsEqual(
+            record.target_binding, expected_binding)) {
+      Reject(
+          contract,
+          "TARGET_AICB_EVENT_BINDING_MISMATCH",
+          "An AICB event is bound to different Target Workload resources.",
+          "Propagate the same verified binding to every AICB event.");
+      return false;
+    }
+  }
+  std::string trailing_line;
+  while (std::getline(workload_input, trailing_line)) {
+    if (trailing_line.find_first_not_of(" \t\r") != std::string::npos) {
+      Reject(
+          contract,
+          "TARGET_AICB_EVENT_BINDING_MISSING",
+          "The AICB workload contains undeclared event records.",
+          "Make the layer count cover every target-bound event.");
+      return false;
+    }
   }
   contract->target_workload_ready = true;
   return true;
@@ -3438,8 +4154,13 @@ LegacyWorkloadCollectiveCheck CheckLegacyWorkloadCollectives(
       !std::getline(input, layer_count_line)) {
     return LegacyWorkloadCollectiveCheck::Malformed;
   }
-  const AstraSim::WorkloadLayerRecordFormat record_format =
-      AstraSim::DecodeWorkloadLayerRecordFormat(header);
+  AstraSim::WorkloadLayerRecordFormat record_format;
+  AstraSim::TargetWorkloadEventBinding target_binding;
+  if (!AstraSim::DecodeWorkloadHeader(
+          header, &record_format, &target_binding) ||
+      target_binding.present) {
+    return LegacyWorkloadCollectiveCheck::Malformed;
+  }
   std::istringstream count_input(layer_count_line);
   int layer_count = 0;
   std::string count_suffix;
@@ -3450,9 +4171,16 @@ LegacyWorkloadCollectiveCheck CheckLegacyWorkloadCollectives(
 
   bool has_alltoallv = false;
   for (int layer = 0; layer < layer_count; ++layer) {
+    std::string layer_line;
+    if (!std::getline(input, layer_line)) {
+      return LegacyWorkloadCollectiveCheck::Malformed;
+    }
+    std::istringstream layer_input(layer_line);
     AstraSim::DecodedWorkloadLayerRecord record;
+    std::string layer_suffix;
     if (!AstraSim::DecodeWorkloadLayerRecord(
-            input, record_format, &record)) {
+            layer_input, record_format, &record) ||
+        (layer_input >> layer_suffix)) {
       return LegacyWorkloadCollectiveCheck::Malformed;
     }
     const std::array<std::string, 3> collective_fields = {{
@@ -3629,12 +4357,12 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
   contract.target_workload_present = target_workload != nullptr;
   if (target_workload != nullptr) {
     if (target_workload->type != JsonValue::Type::Object ||
+        !ValidateTargetWorkloadEnvelope(*target_workload, &contract) ||
         !LoadTargetModel(*target_workload, &contract) ||
         !LoadTargetStep(*target_workload, &contract) ||
         !LoadTargetRouting(*target_workload, &contract) ||
         !LoadTargetMemoryPlan(*target_workload, &contract) ||
-        !ValidateTargetWorkloadComposition(
-            *target_workload, *workload, &contract) ||
+        !ValidateTargetWorkloadComposition(*target_workload, &contract) ||
         !ApplyTargetMemoryGates(&contract)) {
       return contract;
     }
@@ -3709,7 +4437,9 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
   contract.legacy_gpu.nvlink_bandwidth_GBps = nvlink_bandwidth;
   contract.legacy_gpu.nic_bandwidth_GBps = nic_bandwidth;
   const LegacyWorkloadCollectiveCheck collective_check =
-      CheckLegacyWorkloadCollectives(contract.workload_path);
+      contract.target_workload_present
+      ? LegacyWorkloadCollectiveCheck::NoAllToAllV
+      : CheckLegacyWorkloadCollectives(contract.workload_path);
   if (collective_check ==
       LegacyWorkloadCollectiveCheck::InvalidAllToAllVVariant) {
     Reject(
@@ -4145,6 +4875,14 @@ bool WriteAnalyticalResultManifest(
            << ", \"unit\": \"B\", \"semantics\": "
            << "\"FIXED_QUANTIZED_CHECKPOINT_ONLY_NOT_TRAINING_HBM\""
            << ", \"used_as_training_hbm\": false}"
+           << ", \"checkpoint_auxiliary_elements\": {"
+           << "\"quant_scale\": "
+           << contract.target_checkpoint_quant_scale_elements
+           << ", \"routing_table\": "
+           << contract.target_checkpoint_routing_table_elements
+           << ", \"total\": "
+           << contract.target_checkpoint_auxiliary_elements
+           << ", \"unit\": \"count\"}"
            << "}, \"step\": ";
     if (contract.target_step_ready) {
       output << "{\"formula\": \"sequence * MBS * DP * GA\""

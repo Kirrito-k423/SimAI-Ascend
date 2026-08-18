@@ -1150,10 +1150,13 @@ bool Workload::initialize_workload(std::string name) {
       std::cout << "Success in opening workload file" << std::endl;
     }
   }
- std::string firstline;
+  std::string firstline;
   std::getline(inFile,firstline);
-  const WorkloadLayerRecordFormat layer_record_format =
-      DecodeWorkloadLayerRecordFormat(firstline);
+  WorkloadLayerRecordFormat layer_record_format;
+  if (!DecodeWorkloadHeader(
+          firstline, &layer_record_format, &target_workload_binding)) {
+    return false;
+  }
   // std::cout << "First line is : '" << firstline << "'" << std::endl;
   std::istringstream iss(firstline);
   std:string token;
@@ -1282,8 +1285,19 @@ bool Workload::initialize_workload(std::string name) {
   SIZE = lines;
   layers = new Layer*[SIZE];
   for (int i = 0; i < lines; i++) {
+    std::string layer_line;
+    if (!std::getline(inFile, layer_line)) {
+      SIZE = i;
+      return false;
+    }
+    std::istringstream layer_input(layer_line);
     DecodedWorkloadLayerRecord record;
-    if (!DecodeWorkloadLayerRecord(inFile, layer_record_format, &record)) {
+    std::string layer_suffix;
+    if (!DecodeWorkloadLayerRecord(
+            layer_input, layer_record_format, &record) ||
+        (layer_input >> layer_suffix) ||
+        !TargetWorkloadBindingsEqual(
+            record.target_binding, target_workload_binding)) {
       SIZE = i;
       return false;
     }
@@ -1568,7 +1582,8 @@ bool Workload::initialize_workload(std::string name) {
         wg_comm_size * generator->comm_scale,
         selected_involved_dimensions["wg"],
         wg_update_time,
-        specific_policy);
+        specific_policy,
+        record.target_binding);
     if (chekpoints.find(i) != chekpoints.end()) {
       l->is_checkpoint = true;
     }

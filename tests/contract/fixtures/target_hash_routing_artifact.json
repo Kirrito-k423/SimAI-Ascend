@@ -6,8 +6,8 @@
     "id": "target-hash-then-topk-routing"
   },
   "spec": {
-    "modelDigest": "sha256:fe2a04a41c37db98e024f21ae03f5332869c746a96121c54526cf7e5fe4d19ab",
-    "stepDigest": "sha256:b802b140cbade19703be44fa7805dabc01bc6225b3b3a4597cc2864db5c56667",
+    "modelDigest": "sha256:10e215e11db9842d01b77ba2d12c2e82ea10572b6cbf9e5e3a3533f89756b1a3",
+    "stepDigest": "sha256:381474ff712f0e22900be6d2fd4d5d4003ccff98c23b5eaa4b110774c3d69ed2",
     "policy": {
       "mode": "HASH_FIRST_THREE_THEN_TOPK",
       "routedExperts": 2048,
@@ -15,6 +15,7 @@
       "hashRoutedMainLayers": 3,
       "counts": "SYMBOLIC_UNMATERIALIZED"
     },
+    "evidenceRef": "routing-policy-input",
     "evidenceClass": "USER_INPUT",
     "readiness": "FIELD_UNVERIFIED",
     "evidence": [

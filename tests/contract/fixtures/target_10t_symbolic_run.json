@@ -3,29 +3,29 @@
   "run_id": "target-10t-symbolic-memory",
   "backend": "analytical",
   "workload": {
-    "path": "tests/contract/fixtures/minimal_workload.txt",
-    "sha256": "sha256:97100a8f33a60d339347d0030b45362832978b4b5648f4b4c5fbbe7ddbf5eb59",
-    "target_workload_sha256": "sha256:defc6667d90bc9c6137316edbafe6b0f5917af7c604b38116da65433bbbef42c"
+    "path": "tests/contract/fixtures/target_10t_workload.txt",
+    "sha256": "sha256:6763fdbc69a8a91b7d63db24cfe067d6a7a2100ac874f095ae3a80490ff18329",
+    "target_workload_sha256": "sha256:3d76ec84209004bb58108ec2add29a633e4f9eaeae12df71c90c9ff8e6dcb829"
   },
   "target_workload": {
     "schema_version": "simai.target.workload/v1",
     "composition": "SHA256_NEWLINE_DELIMITED_RESOURCE_DIGESTS_V1",
-    "sha256": "sha256:defc6667d90bc9c6137316edbafe6b0f5917af7c604b38116da65433bbbef42c",
+    "sha256": "sha256:3d76ec84209004bb58108ec2add29a633e4f9eaeae12df71c90c9ff8e6dcb829",
     "model": {
       "path": "tests/contract/fixtures/target_10t_model_manifest.json",
-      "sha256": "sha256:fe2a04a41c37db98e024f21ae03f5332869c746a96121c54526cf7e5fe4d19ab"
+      "sha256": "sha256:10e215e11db9842d01b77ba2d12c2e82ea10572b6cbf9e5e3a3533f89756b1a3"
     },
     "step": {
       "path": "tests/contract/fixtures/target_500m_step_manifest.json",
-      "sha256": "sha256:b802b140cbade19703be44fa7805dabc01bc6225b3b3a4597cc2864db5c56667"
+      "sha256": "sha256:381474ff712f0e22900be6d2fd4d5d4003ccff98c23b5eaa4b110774c3d69ed2"
     },
     "routing": {
       "path": "tests/contract/fixtures/target_hash_routing_artifact.json",
-      "sha256": "sha256:a10a53a08506fad0e2473ef800e4af480262812d8fcb55d61a226c7c86087163"
+      "sha256": "sha256:a647fd6d5b1eb982fdefb4b5c560b2890ee6cf808b1e7432b688ad066e3fefca"
     },
     "memory_event_plan": {
       "path": "tests/contract/fixtures/target_symbolic_memory_event_plan.json",
-      "sha256": "sha256:a8ead52a3bd3169330689957293be456679635e8e0e731e05b2281b6afdb8c85"
+      "sha256": "sha256:2f9d4e0783fd63454e1c0689194cb459a54f4891aaeef95333907c0e075d5190"
     }
   },
   "legacy_gpu": {
