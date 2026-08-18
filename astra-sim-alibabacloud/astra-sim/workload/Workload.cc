@@ -1047,30 +1047,33 @@ int Workload::get_layer_numbers(std::string workload_input) {
   return layers;
 }
 ParallelismPolicy Workload::decode_parallelsim(std::string parallelism) {
-  if (parallelism == "DATA")
-    return ParallelismPolicy::Data;
-  else if (parallelism == "HYBRID_TRANSFORMER")
-    return ParallelismPolicy::Transformer;
-  else if (parallelism == "HYBRID_TRANSFORMER_FWD_IN_BCKWD")
-    return ParallelismPolicy::TransformerFwdInBckwd;
-  else if (parallelism == "HYBRID_DLRM")
-    return ParallelismPolicy::DLRM;
-  else if (parallelism == "HYBRID_DLRM_ENHANCED")
-    return ParallelismPolicy ::DLRMEnhanced;
-  else if (parallelism == "MODEL")
-    return ParallelismPolicy::Model;
-  else if (parallelism == "HYBRID_DATA_MODEL")
-    return ParallelismPolicy::HybridDataModel;
-  else if (parallelism == "HYBRID_MODEL_DATA")
-    return ParallelismPolicy::HybridModelData;
-  else if (parallelism == "HYBRID_CUSTOMIZED")
-    return ParallelismPolicy::HybridCustomized;
-  else if (parallelism == "MICRO")
-    return ParallelismPolicy::MicroBenchmark;
-  else if (parallelism == "DISTRIBUTED_INFERENCE")
-    return ParallelismPolicy::DistributedInference;
-  else
-    return ParallelismPolicy::None;
+  switch (DecodeWorkloadParallelismPolicyToken(parallelism)) {
+    case WorkloadParallelismPolicyToken::Data:
+      return ParallelismPolicy::Data;
+    case WorkloadParallelismPolicyToken::Transformer:
+      return ParallelismPolicy::Transformer;
+    case WorkloadParallelismPolicyToken::TransformerFwdInBckwd:
+      return ParallelismPolicy::TransformerFwdInBckwd;
+    case WorkloadParallelismPolicyToken::DLRM:
+      return ParallelismPolicy::DLRM;
+    case WorkloadParallelismPolicyToken::DLRMEnhanced:
+      return ParallelismPolicy::DLRMEnhanced;
+    case WorkloadParallelismPolicyToken::Model:
+      return ParallelismPolicy::Model;
+    case WorkloadParallelismPolicyToken::HybridDataModel:
+      return ParallelismPolicy::HybridDataModel;
+    case WorkloadParallelismPolicyToken::HybridModelData:
+      return ParallelismPolicy::HybridModelData;
+    case WorkloadParallelismPolicyToken::HybridCustomized:
+      return ParallelismPolicy::HybridCustomized;
+    case WorkloadParallelismPolicyToken::MicroBenchmark:
+      return ParallelismPolicy::MicroBenchmark;
+    case WorkloadParallelismPolicyToken::DistributedInference:
+      return ParallelismPolicy::DistributedInference;
+    case WorkloadParallelismPolicyToken::Invalid:
+      return ParallelismPolicy::None;
+  }
+  return ParallelismPolicy::None;
 }
 std::string Workload::parallelism_policy_name(ParallelismPolicy policy) const {
   switch (policy) {
@@ -1591,6 +1594,13 @@ bool Workload::initialize_workload(
                 << " , wg_comp_time: " << wg_compute_time << std::endl;
     }
     if (WorkloadLayerRecordFormatIsCustomized(layer_record_format)) {
+      if (WorkloadLayerRecordFormatIsTargetBound(layer_record_format) &&
+          DecodeWorkloadParallelismPolicyToken(
+              record.specific_parallelism) ==
+              WorkloadParallelismPolicyToken::Invalid) {
+        SIZE = i;
+        return false;
+      }
       specific_policy = decode_parallelsim(record.specific_parallelism);
     }
     if ((parallelismPolicy == ParallelismPolicy::DLRM ||

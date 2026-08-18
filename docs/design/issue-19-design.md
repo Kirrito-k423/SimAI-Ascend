@@ -101,7 +101,7 @@ flowchart TD
 8. evidence 损坏：四资源各自的 `evidenceRef` 必须唯一解析到一个 record，且 record class/readiness 与 spec 完全一致；缺失、歧义、非法枚举或冲突均阻断该层。
 9. scope guard：Routing 顶层、spec、policy、数组或 snake_case/synonym 中的未知字段统一由 exact schema 返回 `TARGET_ROUTING_SCHEMA_INVALID`；因此 #20 字段无需易漏的三字段黑名单。
 10. 不可变执行：Model FIFO 的 open 握手作为确定性同步点，在 workload 首读和 Model 加载之间原子替换 path；Result 仍执行并证明旧 snapshot 的 1 MiB event，而不是新 path 的 2 MiB event。
-11. customized event：target-bound `HYBRID_CUSTOMIZED` 的 18 列记录由 `WorkloadLayerRecordFormatIsCustomized` 单一判定消费 `specific_parallelism`；Result 从每个实际 `Layer` 回读 `CUSTOMIZED/[DATA]`，缺列稳定 fail closed。
+11. customized event：target-bound `HYBRID_CUSTOMIZED` 的 18 列记录由 `WorkloadLayerRecordFormatIsCustomized` 单一判定消费 `specific_parallelism`；composition validator 与 runtime 共用受控 policy token parser。Result 从每个实际 `Layer` 回读 `CUSTOMIZED/[DATA]`；缺列稳定 fail closed，未知或拼写错误值稳定返回 `TARGET_AICB_SPECIFIC_PARALLELISM_INVALID`。Legacy 13 列保留原兼容语义，未知值仍回退 `NONE`。
 
 ## 3. 类图与对象职责
 
@@ -199,7 +199,7 @@ Composite 的 byte string 是以下四个完整 digest identifier 按固定次�
 sha256:<model>\nsha256:<step>\nsha256:<routing>\nsha256:<memory>
 ```
 
-`SHA-256(byte string)` 必须等于 `target_workload.sha256`。Run 的旧 `workload.target_workload_sha256` 即使存在也只是非权威兼容字段；生产身份来自 AICB 文件自身。workload path 在 RunContract 中只读取一次，原始 bytes 存入 `workload_snapshot`；摘要、下述 header/event 校验和 `Sys -> Workload` 运行时解析都使用这份 snapshot。AICB header 以具名字段携带 model/step/routing/memory/composite 五个 digest，标准 event 在原 12 列后追加相同五列（17 列），`HYBRID_CUSTOMIZED` event 在原 13 列 `specific_parallelism` 后追加五列（18 列）。RunContract 校验每个 declared event，随后真实 `Workload` 用同一 decoder 再消费并把 binding 与 decoded specific policy 传给 `Layer`。Result 的 `aicb_execution_binding` 附加 `runtime_record_format` 和逐层 `runtime_specific_parallelism`，用于证明 13/18 列在实际 runtime 采用同一 customized 判定。
+`SHA-256(byte string)` 必须等于 `target_workload.sha256`。Run 的旧 `workload.target_workload_sha256` 即使存在也只是非权威兼容字段；生产身份来自 AICB 文件自身。workload path 在 RunContract 中只读取一次，原始 bytes 存入 `workload_snapshot`；摘要、下述 header/event 校验和 `Sys -> Workload` 运行时解析都使用这份 snapshot。AICB header 以具名字段携带 model/step/routing/memory/composite 五个 digest，标准 event 在原 12 列后追加相同五列（17 列），`HYBRID_CUSTOMIZED` event 在原 13 列 `specific_parallelism` 后追加五列（18 列）。RunContract 校验每个 declared event，并要求 target-bound 18 列的策略命中共享受控枚举；随后真实 `Workload` 用同一 decoder 和 policy parser 再消费并把 binding 与 decoded specific policy 传给 `Layer`。Result 的 `aicb_execution_binding` 附加 `runtime_record_format` 和逐层 `runtime_specific_parallelism`，用于证明 13/18 列在实际 runtime 采用同一 customized 判定；legacy 13 列不启用 target-only 的 unknown-token 拒绝。
 
 组合 envelope 与四个 `{path,sha256}` reference 在任何资源 I/O 前做 exact-key/type/digest 校验。四资源使用同一个 `max+1` single-stream loader，限制分别为 Model 256 KiB、Step 64 KiB、Routing 64 KiB、Memory 128 KiB；恰好上限可读，上限加一稳定返回 `TARGET_*_ARTIFACT_TOO_LARGE`，并支持 `/dev/stdin` 这类 non-seekable 流。非法 envelope 指向不存在文件或 FIFO 时也先以 `TARGET_WORKLOAD_SCHEMA_INVALID` 拒绝，不打开路径。
 
@@ -325,7 +325,7 @@ PASS iff observed_execution_peak_B × 100 < base_hbm_B × 85
 | 冻结 8,414,884,746,526 与 2048/16/3072/1 | 正例断言 Result；独立 Python 任意精度 oracle 从 76 项 logical/storage shape、dtype 与 instances 重建 logical/aux/storage/三 scope；缺/重/未知/shape 不闭合均有 registry 稳定码 |
 | GTS=sequence×MBS×DP×GA，500M 可用，超过拒绝 | 500M 正例；500,000,001 稳定码；零/负/float/unsafe、raw fraction/exponent/leading token、`uint64_t` 边界/乘法溢出、声明不一致和 routed slots 不一致均有真实进程负例 |
 | 四资源内容寻址组合 | 断言 Result 四 digest/composite；正确 AICB header/event、任意 legacy 替换、header 单 hash、event 缺失/篡改与三层 event 传播均走真实进程；`Workload/Layer` 使用同一 decoder；FIFO open 握手后原子替换 workload path 的测试证明摘要、composition 与 runtime 使用同一不可变 snapshot |
-| target-bound 18 列 specific policy | `HYBRID_CUSTOMIZED DATA` 正例从实际 Layer 回读 `CUSTOMIZED/[DATA]`；移除第 13 列稳定返回 `TARGET_AICB_EVENT_BINDING_MISSING`；标准 17 列回读 `STANDARD/[NONE]` |
+| target-bound 18 列 specific policy | `HYBRID_CUSTOMIZED DATA` 正例从实际 Layer 回读 `CUSTOMIZED/[DATA]`；`DATTA` 在模拟前稳定返回 `TARGET_AICB_SPECIFIC_PARALLELISM_INVALID`；移除第 13 列返回 `TARGET_AICB_EVENT_BINDING_MISSING`；标准 17 列回读 `STANDARD/[NONE]`，legacy 13 列兼容路径保持不变 |
 | bounded I/O 与 exact schema | 四资源恰好 byte limit/limit+1、Routing `/dev/stdin`、非法 envelope 指向不存在路径/FIFO；metadata/spec/source/architecture/registry/entry/policy/bindings/component/capacity/evidence 未知 key/type/id mutation |
 | evidence/readiness fail closed | 四资源逐一测试 missing/unresolved/ambiguous ref、非法 record readiness、spec/record class/readiness 冲突，Result 不伪造 READY evidence |
 | 七类显存分别呈现 | symbolic 正例断言准确 key 集、unit、expression；物化例断言七项总和等于 peak；表达式/lifetime/依赖 mutation 被拒绝 |

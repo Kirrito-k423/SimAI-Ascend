@@ -30,6 +30,21 @@ enum class WorkloadLayerRecordFormat {
   HybridCustomizedTargetBound18,
 };
 
+enum class WorkloadParallelismPolicyToken {
+  Invalid,
+  Data,
+  Transformer,
+  TransformerFwdInBckwd,
+  DLRM,
+  DLRMEnhanced,
+  Model,
+  HybridDataModel,
+  HybridModelData,
+  HybridCustomized,
+  MicroBenchmark,
+  DistributedInference,
+};
+
 struct TargetWorkloadEventBinding {
   bool present = false;
   std::string model_sha256;
@@ -101,6 +116,44 @@ inline bool WorkloadLayerRecordFormatIsCustomized(
     WorkloadLayerRecordFormat format) {
   return format == WorkloadLayerRecordFormat::HybridCustomized13 ||
       format == WorkloadLayerRecordFormat::HybridCustomizedTargetBound18;
+}
+
+inline WorkloadParallelismPolicyToken DecodeWorkloadParallelismPolicyToken(
+    const std::string& token) {
+  if (token == "DATA") {
+    return WorkloadParallelismPolicyToken::Data;
+  }
+  if (token == "HYBRID_TRANSFORMER") {
+    return WorkloadParallelismPolicyToken::Transformer;
+  }
+  if (token == "HYBRID_TRANSFORMER_FWD_IN_BCKWD") {
+    return WorkloadParallelismPolicyToken::TransformerFwdInBckwd;
+  }
+  if (token == "HYBRID_DLRM") {
+    return WorkloadParallelismPolicyToken::DLRM;
+  }
+  if (token == "HYBRID_DLRM_ENHANCED") {
+    return WorkloadParallelismPolicyToken::DLRMEnhanced;
+  }
+  if (token == "MODEL") {
+    return WorkloadParallelismPolicyToken::Model;
+  }
+  if (token == "HYBRID_DATA_MODEL") {
+    return WorkloadParallelismPolicyToken::HybridDataModel;
+  }
+  if (token == "HYBRID_MODEL_DATA") {
+    return WorkloadParallelismPolicyToken::HybridModelData;
+  }
+  if (token == "HYBRID_CUSTOMIZED") {
+    return WorkloadParallelismPolicyToken::HybridCustomized;
+  }
+  if (token == "MICRO") {
+    return WorkloadParallelismPolicyToken::MicroBenchmark;
+  }
+  if (token == "DISTRIBUTED_INFERENCE") {
+    return WorkloadParallelismPolicyToken::DistributedInference;
+  }
+  return WorkloadParallelismPolicyToken::Invalid;
 }
 
 inline bool DecodeWorkloadHeader(

@@ -2714,6 +2714,19 @@ bool ValidateTargetWorkloadComposition(
           "Propagate the target binding to every AICB event.");
       return false;
     }
+    if (record_format ==
+            AstraSim::WorkloadLayerRecordFormat::
+                HybridCustomizedTargetBound18 &&
+        AstraSim::DecodeWorkloadParallelismPolicyToken(
+            record.specific_parallelism) ==
+            AstraSim::WorkloadParallelismPolicyToken::Invalid) {
+      Reject(
+          contract,
+          "TARGET_AICB_SPECIFIC_PARALLELISM_INVALID",
+          "A target-bound customized event has an unknown parallelism policy.",
+          "Use a controlled AICB specific_parallelism policy token.");
+      return false;
+    }
     if (!AstraSim::TargetWorkloadBindingsEqual(
             record.target_binding, expected_binding)) {
       Reject(

@@ -1681,6 +1681,20 @@ class AnalyticalRunContractTest(unittest.TestCase):
             result["reject_code"], "TARGET_AICB_EVENT_BINDING_MISSING"
         )
 
+    def test_target_bound_customized_event_rejects_unknown_specific_parallelism(self):
+        completed, result = self.run_mutated_target_contract(
+            target_workload_format="CUSTOMIZED",
+            target_specific_parallelism="DATTA",
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(
+            result["reject_code"],
+            "TARGET_AICB_SPECIFIC_PARALLELISM_INVALID",
+        )
+        self.assertEqual(result["readiness"]["target_workload"], "BLOCKED")
+
     def test_target_workload_execution_uses_the_verified_byte_snapshot(self):
         def replace_one_mib_with_two_mib(workload):
             fields = workload["layers"][0].split("\t")
