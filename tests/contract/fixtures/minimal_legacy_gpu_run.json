@@ -1,0 +1,17 @@
+{
+  "schema_version": "simai.run/v1",
+  "run_id": "legacy-gpu-minimal",
+  "backend": "analytical",
+  "workload": {
+    "path": "tests/contract/fixtures/minimal_workload.txt",
+    "sha256": "sha256:97100a8f33a60d339347d0030b45362832978b4b5648f4b4c5fbbe7ddbf5eb59"
+  },
+  "legacy_gpu": {
+    "gpu_count": 1,
+    "gpus_per_server": 1,
+    "gpu_type": "H100",
+    "nvlink_bandwidth_GBps": 360.0,
+    "nic_bandwidth_GBps": 48.5,
+    "nics_per_server": 1
+  }
+}

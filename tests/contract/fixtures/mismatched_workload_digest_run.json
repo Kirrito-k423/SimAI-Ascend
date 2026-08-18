@@ -1,0 +1,17 @@
+{
+  "schema_version": "simai.run/v1",
+  "run_id": "workload-digest-mismatch",
+  "backend": "analytical",
+  "workload": {
+    "path": "tests/contract/fixtures/minimal_workload.txt",
+    "sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "legacy_gpu": {
+    "gpu_count": 1,
+    "gpus_per_server": 1,
+    "gpu_type": "H100",
+    "nvlink_bandwidth_GBps": 360.0,
+    "nic_bandwidth_GBps": 48.5,
+    "nics_per_server": 1
+  }
+}
