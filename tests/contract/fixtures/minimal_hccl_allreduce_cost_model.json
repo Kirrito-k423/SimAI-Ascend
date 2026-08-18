@@ -11,6 +11,7 @@
     "dtype": "BF16",
     "reduction": "SUM",
     "timingScope": "DEVICE_ONLY",
+    "rawMetadataCompatibility": "simai.issue17.allreduce-metadata-absent/v1",
     "groupDomain": {
       "rankCounts": [4],
       "groupTypes": ["TP"],

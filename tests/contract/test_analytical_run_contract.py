@@ -144,6 +144,47 @@ class AnalyticalRunContractTest(unittest.TestCase):
             result = json.loads(result_path.read_text())
         return completed, result
 
+    def run_generated_legacy_contract(self, workload_token):
+        manifest = json.loads(
+            (FIXTURES / "minimal_legacy_gpu_run.json").read_text()
+        )
+        with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:
+            run_directory = self.prepare_run_directory(temp_dir)
+            workload_path = run_directory / "legacy-workload.txt"
+            workload_path.write_text(
+                "HYBRID_TRANSFORMER model_parallel_NPU_group: 1 ep: 1 pp: 1 "
+                "vpp: 1 ga: 1 all_gpus: 1 checkpoints: 0 "
+                "checkpoint_initiates: 0 pp_comm 0\n"
+                "1\n"
+                f"legacy_layer\t-1\t10\t{workload_token}\t1048576"
+                "\t10\tNONE\t0\t10\tNONE\t0\t10\n"
+            )
+            manifest["workload"] = {
+                "path": str(workload_path),
+                "sha256": "sha256:"
+                + hashlib.sha256(workload_path.read_bytes()).hexdigest(),
+            }
+            manifest_path = run_directory / "run.json"
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+            result_path = run_directory / "result.json"
+            completed = subprocess.run(
+                [
+                    str(self.binary),
+                    "--run-manifest",
+                    str(manifest_path),
+                    "--result-manifest",
+                    str(result_path),
+                ],
+                cwd=run_directory,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+            result = json.loads(result_path.read_text())
+        return completed, result
+
     def run_generated_hccl_contract(
         self,
         *,
@@ -155,6 +196,9 @@ class AnalyticalRunContractTest(unittest.TestCase):
         message_bytes=1048576,
         routing_matrix=None,
         include_routing=True,
+        layer_count=1,
+        routing_padding_bytes=0,
+        routing_rank_override=None,
     ):
         """Build immutable synthetic artifacts, then observe the real process."""
         profile_path = FIXTURES / "minimal_ascend_profile.json"
@@ -262,6 +306,10 @@ class AnalyticalRunContractTest(unittest.TestCase):
                         ],
                     },
                 }
+                if routing_padding_bytes:
+                    routing["spec"]["padding"] = "x" * routing_padding_bytes
+                if routing_rank_override is not None:
+                    routing["spec"]["rankCount"] = routing_rank_override
                 routing_path = run_directory / "routing.json"
                 routing_path.write_text(json.dumps(routing, indent=2) + "\n")
                 routing_digest = "sha256:" + hashlib.sha256(
@@ -333,13 +381,17 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 model_path.read_bytes()
             ).hexdigest()
             workload_path = run_directory / "workload.txt"
+            layer_lines = "".join(
+                f"generated_layer_{index}\t-1\t10\t{workload_token}\t"
+                f"{message_bytes}\t10\tNONE\t0\t10\tNONE\t0\t10\n"
+                for index in range(layer_count)
+            )
             workload_path.write_text(
                 "HYBRID_TRANSFORMER model_parallel_NPU_group: 4 ep: 1 pp: 1 "
                 "vpp: 1 ga: 1 all_gpus: 4 checkpoints: 0 "
                 "checkpoint_initiates: 0 pp_comm 0\n"
-                "1\n"
-                f"generated_layer\t-1\t10\t{workload_token}\t{message_bytes}"
-                "\t10\tNONE\t0\t10\tNONE\t0\t10\n"
+                f"{layer_count}\n"
+                f"{layer_lines}"
             )
             workload_digest = "sha256:" + hashlib.sha256(
                 workload_path.read_bytes()
@@ -384,7 +436,9 @@ class AnalyticalRunContractTest(unittest.TestCase):
             result = json.loads(result_path.read_text())
         return completed, result
 
-    def run_segmented_allgather_contract(self, runtime_message_bytes):
+    def run_segmented_allgather_contract(
+        self, runtime_message_bytes, *, mutate_model=None
+    ):
         """Run one point against a two-segment, three-observation model."""
         profile_path = FIXTURES / "minimal_ascend_profile.json"
         profile_digest = "sha256:" + hashlib.sha256(
@@ -457,6 +511,8 @@ class AnalyticalRunContractTest(unittest.TestCase):
                     },
                 ],
             }
+            if mutate_model is not None:
+                mutate_model(model)
             model_path = run_directory / "model.json"
             model_path.write_text(json.dumps(model, indent=2) + "\n")
             model_digest = "sha256:" + hashlib.sha256(
@@ -591,6 +647,15 @@ class AnalyticalRunContractTest(unittest.TestCase):
         self.assertNotIn(str(manifest_path), serialized)
         self.assertNotIn("tests/contract/fixtures/minimal_workload.txt", serialized)
         self.assertIsNone(re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", serialized))
+
+    def test_legacy_gpu_alltoallv_is_explicitly_unsupported(self):
+        completed, result = self.run_generated_legacy_contract("ALLTOALLV")
+
+        self.assertEqual(completed.returncode, 3)
+        self.assertEqual(result["status"], "UNSUPPORTED")
+        self.assertEqual(result["reject_code"], "LEGACY_ALLTOALLV_UNSUPPORTED")
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+        self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
 
     def test_minimal_ascend_allreduce_uses_profiled_hccl_cost(self):
         completed, result, _ = self.run_contract(
@@ -799,6 +864,84 @@ class AnalyticalRunContractTest(unittest.TestCase):
         self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
         self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
 
+    def test_alltoallv_routing_artifact_has_preparse_byte_limit(self):
+        routing_matrix = [
+            [0, 100000, 200000, 300000],
+            [150000, 0, 250000, 350000],
+            [175000, 225000, 0, 275000],
+            [325000, 125000, 225000, 0],
+        ]
+        within_completed, within_result = self.run_generated_hccl_contract(
+            collective="ALL_TO_ALL_V",
+            workload_token="ALLTOALLV",
+            payload_semantics="HCCL_ALLTOALLV_COUNTS_MATRIX",
+            reduction="NONE",
+            traffic_algorithm="VARIABLE_DIRECT_EXCHANGE",
+            message_bytes=750000,
+            routing_matrix=routing_matrix,
+            routing_padding_bytes=900000,
+        )
+        self.assertEqual(within_completed.returncode, 0)
+        self.assertEqual(within_result["status"], "VALID")
+
+        over_completed, over_result = self.run_generated_hccl_contract(
+            collective="ALL_TO_ALL_V",
+            workload_token="ALLTOALLV",
+            payload_semantics="HCCL_ALLTOALLV_COUNTS_MATRIX",
+            reduction="NONE",
+            traffic_algorithm="VARIABLE_DIRECT_EXCHANGE",
+            message_bytes=750000,
+            routing_matrix=routing_matrix,
+            routing_padding_bytes=1100000,
+        )
+        self.assertEqual(over_completed.returncode, 2)
+        self.assertEqual(over_result["status"], "INVALID_INPUT")
+        self.assertEqual(
+            over_result["reject_code"], "HCCL_ROUTING_ARTIFACT_TOO_LARGE"
+        )
+        self.assertEqual(over_result["results"]["timing_ns"], "UNKNOWN")
+
+    def test_alltoallv_routing_rank_above_dense_limit_is_rejected(self):
+        completed, result = self.run_generated_hccl_contract(
+            collective="ALL_TO_ALL_V",
+            workload_token="ALLTOALLV",
+            payload_semantics="HCCL_ALLTOALLV_COUNTS_MATRIX",
+            reduction="NONE",
+            traffic_algorithm="VARIABLE_DIRECT_EXCHANGE",
+            message_bytes=750000,
+            routing_matrix=[
+                [0, 100000, 200000, 300000],
+                [150000, 0, 250000, 350000],
+                [175000, 225000, 0, 275000],
+                [325000, 125000, 225000, 0],
+            ],
+            routing_rank_override=257,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(
+            result["reject_code"], "HCCL_ROUTING_CAPACITY_EXCEEDED"
+        )
+        self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
+
+    def test_alltoallv_routing_cells_above_dense_limit_is_rejected(self):
+        cells_completed, cells_result = self.run_generated_hccl_contract(
+            collective="ALL_TO_ALL_V",
+            workload_token="ALLTOALLV",
+            payload_semantics="HCCL_ALLTOALLV_COUNTS_MATRIX",
+            reduction="NONE",
+            traffic_algorithm="VARIABLE_DIRECT_EXCHANGE",
+            message_bytes=750000,
+            routing_matrix=[[0] * 257 for _ in range(256)],
+        )
+        self.assertEqual(cells_completed.returncode, 2)
+        self.assertEqual(cells_result["status"], "INVALID_INPUT")
+        self.assertEqual(
+            cells_result["reject_code"], "HCCL_ROUTING_CAPACITY_EXCEEDED"
+        )
+        self.assertEqual(cells_result["results"]["traffic_B"], "UNKNOWN")
+
     def test_segmented_known_points_boundaries_and_monotonicity(self):
         expected = {
             4096: 10205,
@@ -819,6 +962,21 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 )
                 observed.append(result["results"]["timing_ns"])
         self.assertEqual(observed, sorted(observed))
+
+    def test_segmented_model_with_one_ns_discrete_drop_is_rejected(self):
+        def lower_second_segment(model):
+            model["spec"]["fit"]["segments"][1]["startup"]["value"] = 11638
+
+        completed, result = self.run_segmented_allgather_contract(
+            65536, mutate_model=lower_second_segment
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(
+            result["reject_code"], "HCCL_COST_MODEL_NON_MONOTONIC"
+        )
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
 
     def test_all_collectives_share_fixed_profile_message_matrix(self):
         cases = [
@@ -928,6 +1086,25 @@ class AnalyticalRunContractTest(unittest.TestCase):
                     )
                     durations.append(result["results"]["timing_ns"])
             self.assertEqual(durations, sorted(durations))
+
+    def test_second_hccl_request_fails_closed_in_single_request_result_schema(self):
+        completed, result = self.run_generated_hccl_contract(
+            collective="ALL_GATHER",
+            workload_token="ALLGATHER",
+            payload_semantics="HCCL_ALLGATHER_SEND_BYTES",
+            reduction="NONE",
+            traffic_algorithm="RING_ALL_GATHER",
+            layer_count=2,
+        )
+
+        self.assertEqual(completed.returncode, 3)
+        self.assertEqual(result["status"], "UNSUPPORTED")
+        self.assertEqual(
+            result["reject_code"], "HCCL_MULTIPLE_REQUESTS_UNSUPPORTED"
+        )
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+        self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
+        self.assertEqual(result["results"]["collective_payload"], "UNKNOWN")
 
     def test_explicit_legacy_busbw_adapter_converts_to_canonical_algbw(self):
         completed, result = self.run_mutated_ascend_contract(
@@ -1107,6 +1284,27 @@ class AnalyticalRunContractTest(unittest.TestCase):
         self.assertEqual(result["reject_code"], "HCCL_COST_MODEL_FORMULA_INVALID")
         self.assertEqual(result["readiness"]["contract"], "BLOCKED")
         self.assertEqual(result["readiness"]["hccl_cost_model"], "BLOCKED")
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+
+    def test_allreduce_present_algorithm_and_statistics_must_match_model(self):
+        def inject_conflicting_metadata(raw):
+            raw["spec"]["algorithm"] = {
+                "name": "TREE_NOT_RING",
+                "version": "synthetic-conflict-v1",
+            }
+            raw["spec"]["statistics"] = {
+                "timingStatistic": "MINIMUM",
+                "sampleCount": 5,
+                "warmupExcluded": False,
+            }
+
+        completed, result = self.run_mutated_ascend_contract(
+            mutate_raw=inject_conflicting_metadata
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(result["reject_code"], "RAW_OBSERVATION_SCHEMA_INVALID")
         self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
 
     def test_field_unverified_model_cannot_claim_measured_evidence(self):

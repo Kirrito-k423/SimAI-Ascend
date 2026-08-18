@@ -27,7 +27,7 @@
 1. 运行时域 gate：operation、message bytes、rank count、group type、topology domain/digest 必须精确命中；
 2. 确定性计算：选择单段或唯一分段，计算 duration、collective payload 与算法展开后的 group-total traffic。
 
-任一 gate 失败都由 provider 记录为 unsupported，Result Manifest 输出 `UNKNOWN`，不会进入 `cal_busbw`。legacy GPU 仍只在未选择 `device_profile` 的 #16 路径上使用原 `cal_busbw`。
+任一 gate 失败都由 provider 记录为 unsupported，Result Manifest 输出 `UNKNOWN`，不会进入 `cal_busbw`。legacy GPU 仍只在未选择 `device_profile` 的 #16 路径上使用原 `cal_busbw`；唯一例外是 `ALLTOALLV` 在入口即返回 `LEGACY_ALLTOALLV_UNSUPPORTED`，因为 variable counts 必须来自已验证的 HCCL provider 与 routing artifact。
 
 ### 2.2 开发视图
 
@@ -82,6 +82,7 @@ artifact 校验失败发生在构造 `Sys` 之前；运行时 domain miss 发生
 6. 分段 AllGather：4096、65535、65536、1048576 B 分别命中已知点和边界，得到 10205、13277、13277、37853 ns，序列非递减。
 7. explicit legacy busbw：37.5e9 B/s 的四 rank AllReduce ring busbw 显式换算为 25e9 B/s algbw；缺 adapter/列、歧义单位、域不一致均拒绝。
 8. 缺 topology、A2AV 缺 routing、Profile 缺 collective cost 分别产生独立 `HCCL_TOPOLOGY_REQUIRED`、`HCCL_ROUTING_REQUIRED`、`HCCL_COST_MODEL_REQUIRED`，定量结果保持 `UNKNOWN`。
+9. 一个 workload 含第二次 HCCL 请求时返回 `HCCL_MULTIPLE_REQUESTS_UNSUPPORTED`；当前 Result schema 只表达一个请求，不输出累计 timing/traffic 配末次 payload 的非闭合结果。
 
 ## 3. 类图与职责
 
@@ -157,13 +158,13 @@ validator 拥有 schema、digest、单位和 evidence 规则；provider 不再�
 }
 ```
 
-DerivedCostModel 的 `routingDigest`、Run reference digest 和 routing 文件内容摘要必须三方相等。routing 使用 `HCCL_SEND_COUNTS_BYTES`、单位 `B`、精确 `rankCount × rankCount` matrix；对角必须为 0，值必须是 JSON 安全范围内的非负整数。Profile/topology/rank 不一致或累计溢出一律拒绝。
+DerivedCostModel 的 `routingDigest`、Run reference digest 和 routing 文件内容摘要必须三方相等。routing 使用 `HCCL_SEND_COUNTS_BYTES`、单位 `B`、精确 `rankCount × rankCount` matrix；对角必须为 0，值必须是 JSON 安全范围内的非负整数。Profile/topology/rank 不一致或累计溢出一律拒绝。当前 dense JSON 路径在读取/JSON 物化之前检查文件大小，上限为 1 MiB；解析后、分配 receive totals 之前检查 `rankCount <= 256`、行列各不超过 256 且总 cells 不超过 65,536。越界分别返回 `HCCL_ROUTING_ARTIFACT_TOO_LARGE` 和 `HCCL_ROUTING_CAPACITY_EXCEEDED`。这只是有界 dense Analytical 输入，不是后续大规模 streaming/projected routing。
 
 DerivedCostModel `inputSamples[]` 可以引用多个不可变 RawObservation。入口逐个执行 path/digest/JSON/schema/domain/timing 残差校验；任一失败都会阻断整个模型。Result 的 primary raw digest 保持 #17 字段兼容，完整 sample 引用集合同时受 DerivedCostModel 自身摘要保护。
 
 ### 4.2 RawObservation 契约
 
-除 #17 兼容的原始 AllReduce worked example 外，新增 collective 的 RawObservation 必须显式记录：
+所有新 RawObservation 必须显式记录：
 
 - collective、每 rank payload 字节语义、dtype/reduction；
 - rank count、group type、scope、topology digest；
@@ -173,6 +174,8 @@ DerivedCostModel `inputSamples[]` 可以引用多个不可变 RawObservation。�
 - correctness `PASS`、eligibility `fit=true`、完整 evidence。
 
 模型预测与 raw time 的残差最多 1 ns；`message_B / time_ns` 推导的 alg bandwidth 与 raw normalized 值相对残差最多 10 ppm。`FIELD_UNVERIFIED` 不能包含 `MEASURED` 声明。
+
+#17 原始 AllReduce fixture 同时缺少 `algorithm` 和 `statistics`。兼容仅在其 DerivedCostModel 显式声明 `rawMetadataCompatibility=simai.issue17.allreduce-metadata-absent/v1` 且两个对象都完全缺失时生效；任一对象一旦出现，就必须完整匹配模型的 `RING`、`ARITHMETIC_MEAN`、正 sample count 与 `warmupExcluded=true`。未知 marker、只缺一组字段或已提供但冲突的字段均拒绝。
 
 ### 4.3 时延、payload 与流量
 
@@ -196,7 +199,7 @@ RS 和均匀 A2A 要求 `M % P == 0`。所有乘法、加法和 duration roundin
 
 ### 4.4 分段模型
 
-`PIECEWISE_ALPHA_BETA` 使用 `interpolation=SEGMENT_LOCAL`。至少两个 segment；第一个 min 和模型 min 相同，相邻边界必须相接，非末段采用 `[min,max)`，末段采用 `[min,max]` 且 max 等于模型 max。边界两侧公式值差不得超过 1 ns，每段带宽为正且最大 duration 可安全 `llround`。正带宽加连续边界保证分段结果不下降；真实进程测试仍显式检查边界前、边界点和全序单调性。
+`PIECEWISE_ALPHA_BETA` 使用 `interpolation=SEGMENT_LOCAL`。至少两个 segment；第一个 min 和模型 min 相同，相邻边界必须相接，非末段采用 `[min,max)`，末段采用 `[min,max]` 且 max 等于模型 max。边界两侧连续公式值差不得超过 1 ns，每段带宽为正且最大 duration 可安全 `llround`。连续值接近并不足以保证离散整数点单调：validator 还分别计算上一段最后可取字节 `next.min-1` 和下一段首字节 `next.min` 的 `llround` 结果，要求后者不小于前者；下降 1 ns 也以 `HCCL_COST_MODEL_NON_MONOTONIC` 拒绝。
 
 ### 4.5 显式 legacy busbw adapter
 
@@ -217,7 +220,13 @@ AG/RS/A2A algbw = busbw × P / (P-1)
 
 A2AV 不接受单一 legacy busbw row。Result `provenance.cost_model_adapter=EXPLICIT_LEGACY_BUSBW` 明确记录适配发生；普通模型为 `NONE`。不存在任何按列位置、`GB/s` 文本、相邻消息或默认 rank 的隐式兼容。
 
-### 4.6 readiness 与 UNKNOWN
+legacy GPU workload 同样不允许 `ALLTOALLV[_*]` 进入 `cal_busbw`。Run Contract 在启动 Analytical engine 前按完整 workload token 检出并返回 `UNSUPPORTED/LEGACY_ALLTOALLV_UNSUPPORTED`；其他 legacy collective 保持 #16 行为。
+
+### 4.6 单请求 Result 闭包
+
+`simai.result/v1` 当前只有一个 `results.collective` 和一个 `results.collective_payload`，没有逐请求数组。因此 provider 只接受一次成功的 `Estimate`；第二次调用设置 `MULTIPLE_REQUESTS_UNSUPPORTED`，进程返回 exit 3 与 `HCCL_MULTIPLE_REQUESTS_UNSUPPORTED`，所有定量结果为 `UNKNOWN`。这比累计 timing/traffic 但只保留最后一次 payload 更诚实。多请求/逐层结果 schema 属于后续独立演进。
+
+### 4.7 readiness 与 UNKNOWN
 
 | 缺失能力 | 状态 / reject code | topology | routing | hccl cost | timing/traffic |
 | --- | --- | --- | --- | --- | --- |
@@ -246,11 +255,11 @@ A2AV 不接受单一 legacy busbw row。Result `provenance.cost_model_adapter=EX
 | Issue #18 Acceptance Criteria | 黑盒证据 |
 | --- | --- |
 | 1. AR/AG/RS/A2A/A2AV 独立请求及 canonical payload/timing/traffic | 五个 operation 测试分别通过独立 workload + model 运行；断言 operation、payload semantics、input/output、routing digest、worked-example timing 与 group traffic |
-| 2. RawObservation 完整记录；DerivedCostModel 支持分段 | 新 collective raw 构造包含 domain/algorithm/statistics/evidence；多样本模型逐个校验；两段模型真实进程命中 |
-| 3. known point、interval boundary、monotonicity | 4096/65535/65536/1048576 四点测试断言精确 ns，且结果排序不下降 |
+| 2. RawObservation 完整记录；DerivedCostModel 支持分段 | 新 collective raw 构造包含 domain/algorithm/statistics/evidence；多样本模型逐个校验；AR 冲突 metadata 拒绝且 #17 显式 compatibility 回归；两段模型真实进程命中 |
+| 3. known point、interval boundary、monotonicity | 4096/65535/65536/1048576 四点测试断言精确 ns，且结果排序不下降；跨段下降 1 ns 的模型稳定拒绝 |
 | 4. legacy busbw 仅显式 adapter | 有效 adapter 断言 provenance 与换算结果；缺 adapter、缺列、`GB/s`、message-domain mismatch 分别断言独立拒绝码和 UNKNOWN |
 | 5. routing/topology/cost 可区分 UNKNOWN/readiness | 三个负例分别断言独立 reject code、`UNKNOWN/READY/NOT_REQUIRED/BLOCKED` 组合和 UNKNOWN 定量结果 |
-| 6. 真实进程与 legacy 回归 | 同一 30-test contract suite 包含 #16 legacy GPU/CLI、#17 AR 和 #18 全部新增行为 |
+| 6. 真实进程与 legacy 回归 | 同一完整 contract suite 包含 #16 legacy GPU/CLI、#17 AR、五类消息矩阵、legacy A2AV fail-closed 和 #18 全部新增行为；最终数量以验证命令输出为准 |
 
 独立 message matrix 使用同一固定 Profile/拓扑和确定性 synthetic model，改变 collective 与 message point；所有 Run reference 重新计算 SHA-256。Result 反向核对 operation/payload/timing/traffic/provenance，避免由实现内部状态自证。
 
@@ -259,6 +268,8 @@ A2AV 不接受单一 legacy busbw row。Result `provenance.cost_model_adapter=EX
 - 只支持 artifact 明确声明的 BF16、group/topology/message 域；不外推、不自动跨 dtype、rank 或 topology 复用。
 - 成本模型描述 device-only collective duration 与算法字节，不包含共享链路争用、计算通信 overlap、逐 link flow 或端到端 step time。
 - A2AV duration 以 routing 的最大 per-rank send bytes 选择模型点；完整 per-link contention 需要独立 Simulation 能力，不能从本票结果推导。
+- dense A2AV routing 限制为 1 MiB artifact、最多 256 ranks/65,536 cells；不声称实现 #19 的大规模 streaming/projected routing。
+- 当前 Result schema 只支持单 HCCL 请求；多层/多请求 workload fail closed，不提供逐请求或聚合 payload。
 - 分段参数由已提供 RawObservation 派生并被一致性校验；本票不实现拟合器、模型 registry 或现场采集。
 - 公开 worked examples 是 `USER_INPUT/FIELD_UNVERIFIED`，不宣称 A2/A3 实测精度，更不把 A5 预测标为测量。
 - `hbm_peak_B`、吞吐、Top5、representatives 与 fault goodput 仍保持 `UNKNOWN`；这些不属于 #18。

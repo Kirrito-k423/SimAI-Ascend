@@ -24,6 +24,9 @@ AstraSim::CollectiveCostEstimate HcclCostModel::Unsupported(
 
 AstraSim::CollectiveCostEstimate HcclCostModel::Estimate(
     const AstraSim::CollectiveCostRequest& request) {
+  if (summary_.has_estimate) {
+    return Unsupported("MULTIPLE_REQUESTS_UNSUPPORTED");
+  }
   if (request.collective != config_.collective) {
     return Unsupported("COLLECTIVE_OUTSIDE_MODEL_DOMAIN");
   }

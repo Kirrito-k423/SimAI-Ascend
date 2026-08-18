@@ -32,6 +32,9 @@ namespace {
 
 const char* kRunSchemaVersion = "simai.run/v1";
 const char* kResultSchemaVersion = "simai.result/v1";
+const size_t kMaximumRoutingArtifactBytes = 1024U * 1024U;
+const int kMaximumDenseRoutingRanks = 256;
+const size_t kMaximumDenseRoutingCells = 256U * 256U;
 
 uint32_t RotateRight(uint32_t value, uint32_t count) {
   return (value >> count) | (value << (32U - count));
@@ -864,7 +867,11 @@ bool LoadArtifact(
     const JsonValue& reference,
     const ArtifactLoadPolicy& policy,
     AnalyticalRunContract* contract,
-    LoadedArtifact* artifact) {
+    LoadedArtifact* artifact,
+    size_t maximum_bytes = 0U,
+    const char* too_large_code = nullptr,
+    const char* too_large_message = nullptr,
+    const char* too_large_remediation = nullptr) {
   std::string path;
   std::string declared_digest;
   if (!ParseArtifactReference(reference, &path, &declared_digest)) {
@@ -874,6 +881,23 @@ bool LoadArtifact(
         policy.reference_message,
         policy.reference_remediation);
     return false;
+  }
+  if (maximum_bytes > 0U) {
+    std::ifstream size_probe(
+        path.c_str(), std::ios::in | std::ios::binary | std::ios::ate);
+    if (size_probe) {
+      const std::streamoff artifact_bytes = size_probe.tellg();
+      if (artifact_bytes >= 0 &&
+          static_cast<uint64_t>(artifact_bytes) >
+              static_cast<uint64_t>(maximum_bytes)) {
+        Reject(
+            contract,
+            too_large_code,
+            too_large_message,
+            too_large_remediation);
+        return false;
+      }
+    }
   }
   std::string content;
   if (!ReadFile(path, &content)) {
@@ -1092,6 +1116,7 @@ struct ValidatedHcclCostModel {
   std::string evidence_level;
   std::string field_readiness;
   std::string routing_digest;
+  std::string raw_metadata_compatibility;
 };
 
 bool SupportedCollective(const std::string& collective) {
@@ -1303,11 +1328,17 @@ bool ParseLegacyBusbwAdapter(
   return true;
 }
 
+enum class SegmentParseFailure {
+  None,
+  NonMonotonic,
+};
+
 bool ParsePiecewiseSegments(
     const JsonValue& fit,
     uint64_t model_minimum,
     uint64_t model_maximum,
-    std::vector<HcclCostSegment>* parsed) {
+    std::vector<HcclCostSegment>* parsed,
+    SegmentParseFailure* failure) {
   const JsonValue* segments = Member(fit, "segments");
   if (segments == nullptr || segments->type != JsonValue::Type::Array ||
       segments->array.size() < 2U) {
@@ -1365,6 +1396,18 @@ bool ParsePiecewiseSegments(
       if (!std::isfinite(previous_duration) ||
           !std::isfinite(current_duration) ||
           std::fabs(previous_duration - current_duration) > 1.0) {
+        return false;
+      }
+      const double previous_discrete_duration =
+          static_cast<double>(previous.startup_ns) +
+          static_cast<double>(segment.minimum_message_bytes - 1U) *
+              1000000000.0 / previous.bandwidth_Bps;
+      const uint64_t previous_discrete_ns = static_cast<uint64_t>(
+          std::llround(previous_discrete_duration));
+      const uint64_t current_discrete_ns = static_cast<uint64_t>(
+          std::llround(current_duration));
+      if (current_discrete_ns < previous_discrete_ns) {
+        *failure = SegmentParseFailure::NonMonotonic;
         return false;
       }
     }
@@ -1427,6 +1470,7 @@ bool ValidateHcclCostModel(
   std::string payload_semantics;
   int rank_count = 0;
   bool extrapolation_allowed = true;
+  SegmentParseFailure segment_failure = SegmentParseFailure::None;
   const std::string supported_formula =
       "round(startup_ns + message_B / bandwidth_Bps * 1000000000)";
   if (fit != nullptr &&
@@ -1468,6 +1512,14 @@ bool ValidateHcclCostModel(
       model_profile_digest != profile_digest ||
       !StringMember(*spec, "collective", &validated->collective) ||
       !SupportedCollective(validated->collective) || group_domain == nullptr ||
+      (Member(*spec, "rawMetadataCompatibility") != nullptr &&
+       (!StringMember(
+            *spec,
+            "rawMetadataCompatibility",
+            &validated->raw_metadata_compatibility) ||
+        validated->collective != "ALL_REDUCE" ||
+        validated->raw_metadata_compatibility !=
+            "simai.issue17.allreduce-metadata-absent/v1")) ||
       !StringMember(*spec, "dtype", &validated->dtype) ||
       validated->dtype != "BF16" ||
       !StringMember(*spec, "reduction", &validated->reduction) ||
@@ -1522,7 +1574,8 @@ bool ValidateHcclCostModel(
              *fit,
              validated->config.minimum_message_bytes,
              validated->config.maximum_message_bytes,
-             &validated->config.segments)) ||
+             &validated->config.segments,
+             &segment_failure)) ||
         (family == "LEGACY_BUSBW_ADAPTER" &&
          interpolation == "NONE" && startup != nullptr &&
          PositiveUint64Member(
@@ -1550,6 +1603,14 @@ bool ValidateHcclCostModel(
           *extrapolation, "allowed", &extrapolation_allowed) ||
       extrapolation_allowed || !UnitsAreCanonical(model) ||
       ContainsString(model, "MEASURED")) {
+    if (segment_failure == SegmentParseFailure::NonMonotonic) {
+      Reject(
+          contract,
+          "HCCL_COST_MODEL_NON_MONOTONIC",
+          "The piecewise HCCL model decreases at an integer-byte boundary.",
+          "Make each segment boundary nondecreasing after ns rounding.");
+      return false;
+    }
     Reject(
         contract,
         "HCCL_COST_MODEL_SCHEMA_INVALID",
@@ -1703,8 +1764,8 @@ bool ValidateRawObservation(
               raw_routing_digest == model.routing_digest)
            : PositiveUint64Member(
                  *bytes_per_rank, "uniformValue", &message_bytes));
-  const bool has_canonical_metadata = model.collective == "ALL_REDUCE" ||
-      (algorithm != nullptr &&
+  const bool has_canonical_metadata =
+      (algorithm != nullptr && statistics != nullptr &&
        StringMember(*algorithm, "name", &algorithm_name) &&
        algorithm_name == model.config.traffic_algorithm &&
        StringMember(*algorithm, "version", &algorithm_version) &&
@@ -1714,6 +1775,11 @@ bool ValidateRawObservation(
        PositiveIntMember(*statistics, "sampleCount", &sample_count) &&
        BooleanMember(*statistics, "warmupExcluded", &warmup_excluded) &&
        warmup_excluded);
+  const bool uses_issue17_metadata_compatibility =
+      model.collective == "ALL_REDUCE" && algorithm == nullptr &&
+      statistics == nullptr &&
+      model.raw_metadata_compatibility ==
+          "simai.issue17.allreduce-metadata-absent/v1";
   if (!StringMember(raw, "apiVersion", &api_version) ||
       api_version != "simai.ascend.observation/v1alpha1" ||
       !StringMember(raw, "kind", &kind) || kind != "HcclRawSample" ||
@@ -1763,7 +1829,9 @@ bool ValidateRawObservation(
       !StringMember(*correctness, "status", &correctness_status) ||
       correctness_status != "PASS" || eligibility == nullptr ||
       !BooleanMember(*eligibility, "fit", &eligible_for_fit) ||
-      !eligible_for_fit || !has_canonical_metadata || !UnitsAreCanonical(raw) ||
+      !eligible_for_fit ||
+      (!has_canonical_metadata && !uses_issue17_metadata_compatibility) ||
+      !UnitsAreCanonical(raw) ||
       ContainsString(raw, "MEASURED")) {
     Reject(
         contract,
@@ -1863,6 +1931,46 @@ bool ValidateA2AVRouting(
   const JsonValue* counts = spec == nullptr ? nullptr : Member(*spec, "sendCounts");
   const JsonValue* evidence =
       spec == nullptr ? nullptr : FirstArrayObject(*spec, "evidence");
+  int declared_rank_count = 0;
+  if (spec != nullptr &&
+      PositiveIntMember(*spec, "rankCount", &declared_rank_count) &&
+      declared_rank_count > kMaximumDenseRoutingRanks) {
+    Reject(
+        contract,
+        "HCCL_ROUTING_CAPACITY_EXCEEDED",
+        "The dense HCCL routing rank count exceeds the bounded parser limit.",
+        "Use at most 256 ranks for this dense Analytical routing artifact.");
+    return false;
+  }
+  if (counts != nullptr && counts->type == JsonValue::Type::Array) {
+    size_t declared_cells = 0U;
+    if (counts->array.size() >
+        static_cast<size_t>(kMaximumDenseRoutingRanks)) {
+      Reject(
+          contract,
+          "HCCL_ROUTING_CAPACITY_EXCEEDED",
+          "The dense HCCL routing matrix exceeds the bounded cell limit.",
+          "Use at most 256 rows, 256 columns, and 65,536 cells.");
+      return false;
+    }
+    for (const JsonValue& row : counts->array) {
+      if (row.type == JsonValue::Type::Array &&
+          (row.array.size() >
+               static_cast<size_t>(kMaximumDenseRoutingRanks) ||
+           declared_cells >
+               kMaximumDenseRoutingCells - row.array.size())) {
+        Reject(
+            contract,
+            "HCCL_ROUTING_CAPACITY_EXCEEDED",
+            "The dense HCCL routing matrix exceeds the bounded cell limit.",
+            "Use at most 256 rows, 256 columns, and 65,536 cells.");
+        return false;
+      }
+      if (row.type == JsonValue::Type::Array) {
+        declared_cells += row.array.size();
+      }
+    }
+  }
   if (!StringMember(routing, "apiVersion", &api_version) ||
       api_version != "simai.ascend.routing/v1alpha1" ||
       !StringMember(routing, "kind", &kind) ||
@@ -2049,7 +2157,11 @@ bool LoadAscendResources(
             *routing_reference,
             routing_policy,
             contract,
-            &routing_artifact)) {
+            &routing_artifact,
+            kMaximumRoutingArtifactBytes,
+            "HCCL_ROUTING_ARTIFACT_TOO_LARGE",
+            "The dense HCCL routing artifact exceeds the pre-parse byte limit.",
+            "Use a JSON routing artifact no larger than 1 MiB.")) {
       return false;
     }
     contract->routing_sha256 = routing_artifact.sha256;
@@ -2174,6 +2286,22 @@ std::string JsonEscape(const std::string& input) {
 
 std::string Quote(const std::string& value) {
   return "\"" + JsonEscape(value) + "\"";
+}
+
+bool WorkloadRequestsAllToAllV(const std::string& path) {
+  std::string content;
+  if (!ReadFile(path, &content)) {
+    return false;
+  }
+  std::istringstream tokens(content);
+  std::string token;
+  while (tokens >> token) {
+    if (token == "ALLTOALLV" ||
+        token.compare(0U, 10U, "ALLTOALLV_") == 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace
@@ -2395,6 +2523,14 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
   }
   contract.legacy_gpu.nvlink_bandwidth_GBps = nvlink_bandwidth;
   contract.legacy_gpu.nic_bandwidth_GBps = nic_bandwidth;
+  if (WorkloadRequestsAllToAllV(contract.workload_path)) {
+    RejectUnsupported(
+        &contract,
+        "LEGACY_ALLTOALLV_UNSUPPORTED",
+        "AllToAllV requires a validated HCCL model and routing artifact.",
+        "Use an Ascend Profile, HCCL model, and immutable routing matrix.");
+    return contract;
+  }
 
   contract.accepted = true;
   contract.exit_code = 0;
@@ -2428,21 +2564,29 @@ bool WriteAnalyticalResultManifest(
       contract.accepted && execution_succeeded && ascend_cost_valid;
   const bool runtime_domain_miss = contract.accepted &&
       contract.ascend_profiled && execution_succeeded && !ascend_cost_valid;
+  const bool multiple_requests_unsupported = runtime_domain_miss &&
+      cost_summary.unsupported_reason == "MULTIPLE_REQUESTS_UNSUPPORTED";
   const std::string status = runtime_domain_miss
       ? "UNSUPPORTED"
       : (valid ? "VALID" : contract.status);
   const std::string reject_code = runtime_domain_miss
-      ? "HCCL_MODEL_DOMAIN_MISS"
+      ? (multiple_requests_unsupported
+             ? "HCCL_MULTIPLE_REQUESTS_UNSUPPORTED"
+             : "HCCL_MODEL_DOMAIN_MISS")
       : (valid ? "NONE" : contract.reject_code);
   const std::string message = runtime_domain_miss
-      ? "The workload collective is outside the HCCL model domain."
+      ? (multiple_requests_unsupported
+             ? "The Result schema supports one HCCL request per run."
+             : "The workload collective is outside the HCCL model domain.")
       : (valid
              ? (contract.ascend_profiled
                     ? "The Ascend HCCL Analytical run completed."
                     : "The analytical legacy GPU run completed.")
              : contract.message);
   const std::string remediation = runtime_domain_miss
-      ? "Use a workload collective covered by the exact model domain."
+      ? (multiple_requests_unsupported
+             ? "Split the workload into one-request Analytical runs."
+             : "Use a workload collective covered by the exact model domain.")
       : (valid ? "NONE" : contract.remediation);
   const std::string accelerator =
       contract.ascend_profiled

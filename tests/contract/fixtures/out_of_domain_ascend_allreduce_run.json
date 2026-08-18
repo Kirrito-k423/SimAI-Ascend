@@ -12,6 +12,6 @@
   },
   "collective_cost_model": {
     "path": "tests/contract/fixtures/minimal_hccl_allreduce_cost_model.json",
-    "sha256": "sha256:980829346188e3d29da365331071b20c4d6a9fa063dd0c1de48f06af606d7084"
+    "sha256": "sha256:aa3be631b9a360f499c87c01832184121dff71173951683c95b46c7d6c0398b8"
   }
 }
