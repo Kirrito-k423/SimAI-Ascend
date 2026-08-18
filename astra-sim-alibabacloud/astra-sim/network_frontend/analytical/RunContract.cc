@@ -44,6 +44,7 @@ const size_t kMaximumTargetStepArtifactBytes = 64U * 1024U;
 const size_t kMaximumTargetRoutingArtifactBytes = 64U * 1024U;
 const size_t kMaximumTargetMemoryArtifactBytes = 128U * 1024U;
 const size_t kMaximumProjectedRoutingArtifactBytes = 8U * 1024U * 1024U;
+const size_t kMaximumTopologyPlacementArtifactBytes = 256U * 1024U;
 const int kMaximumProjectedDenseRanks = 256;
 const size_t kMaximumProjectedDomains = 1024U;
 
@@ -5660,6 +5661,341 @@ bool LoadProjectedA2A(
   return true;
 }
 
+std::string TopologyPlacementSha256Identifier(const std::string& input) {
+  return "sha256:" + Sha256Hex(input);
+}
+
+bool LoadTopologyPlacement(
+    const JsonValue& root,
+    AnalyticalRunContract* contract) {
+  const JsonValue* envelope = Member(root, "topology_placement");
+  if (envelope == nullptr) {
+    return true;
+  }
+  std::string schema_version;
+  const JsonValue* artifact_reference = Member(*envelope, "artifact");
+  if (!ObjectHasExactKeys(*envelope, {"schema_version", "artifact"}) ||
+      !StringMember(*envelope, "schema_version", &schema_version) ||
+      schema_version != "simai.topology-placement.request/v1alpha1" ||
+      artifact_reference == nullptr) {
+    Reject(
+        contract,
+        "TOPOLOGY_PLACEMENT_ENVELOPE_INVALID",
+        "The topology placement request envelope is invalid.",
+        "Use the exact simai.topology-placement.request/v1alpha1 envelope.");
+    return false;
+  }
+  std::string artifact_path;
+  std::string declared_digest;
+  struct stat artifact_stat;
+  if (!ParseArtifactReference(
+          *artifact_reference, &artifact_path, &declared_digest) ||
+      stat(artifact_path.c_str(), &artifact_stat) != 0 ||
+      !S_ISREG(artifact_stat.st_mode)) {
+    Reject(
+        contract,
+        "TOPOLOGY_PLACEMENT_ARTIFACT_NOT_REGULAR",
+        "Topology placement input must be an immutable regular artifact.",
+        "Provide one bounded content-addressed regular JSON file.");
+    return false;
+  }
+  const ArtifactLoadPolicy artifact_policy = {
+      "TOPOLOGY_PLACEMENT_REFERENCE_INVALID",
+      "The topology placement artifact reference is invalid.",
+      "Provide artifact.path and sha256:<64 lowercase hex digits>.",
+      "TOPOLOGY_PLACEMENT_ARTIFACT_NOT_FOUND",
+      "The topology placement artifact could not be read.",
+      "Provide a readable immutable regular file.",
+      "TOPOLOGY_PLACEMENT_ARTIFACT_DIGEST_MISMATCH",
+      "The topology placement artifact differs from its digest.",
+      "Use the intended immutable artifact and digest.",
+      "TOPOLOGY_PLACEMENT_ARTIFACT_INVALID_JSON",
+      "The topology placement artifact is not valid JSON.",
+      "Correct the JSON syntax and retry."};
+  LoadedArtifact artifact;
+  if (!LoadArtifact(
+          *artifact_reference,
+          artifact_policy,
+          contract,
+          &artifact,
+          kMaximumTopologyPlacementArtifactBytes,
+          "TOPOLOGY_PLACEMENT_ARTIFACT_TOO_LARGE",
+          "The topology placement artifact exceeds 256 KiB.",
+          "Use a bounded topology placement artifact no larger than 256 KiB.")) {
+    return false;
+  }
+  const JsonValue* metadata = Member(artifact.document, "metadata");
+  const JsonValue* spec = Member(artifact.document, "spec");
+  const JsonValue* topology = spec == nullptr
+      ? nullptr
+      : Member(*spec, "topology");
+  const JsonValue* resource = spec == nullptr
+      ? nullptr
+      : Member(*spec, "resourceScenario");
+  const JsonValue* parallel = spec == nullptr
+      ? nullptr
+      : Member(*spec, "parallelSpace");
+  const JsonValue* attention = parallel == nullptr
+      ? nullptr
+      : Member(*parallel, "attention");
+  const JsonValue* moe = parallel == nullptr ? nullptr : Member(*parallel, "moe");
+  const JsonValue* capabilities = spec == nullptr
+      ? nullptr
+      : Member(*spec, "frameworkCapabilities");
+  const JsonValue* ragged = capabilities == nullptr
+      ? nullptr
+      : Member(*capabilities, "raggedParallelGroups");
+  const JsonValue* placement = spec == nullptr
+      ? nullptr
+      : Member(*spec, "placementPolicies");
+  const JsonValue* traffic = spec == nullptr ? nullptr : Member(*spec, "traffic");
+  std::string api_version;
+  std::string kind;
+  std::string schema_semver;
+  std::string traffic_semantics;
+  std::string traffic_unit;
+  TopologyPlacementConfig parsed;
+  parsed.present = true;
+  parsed.artifact_sha256 = artifact.sha256;
+  parsed.artifact_bytes_read = artifact.bytes_read;
+  if (!ObjectHasExactKeys(
+          artifact.document,
+          {"apiVersion", "kind", "schemaSemver", "metadata", "spec"}) ||
+      !StringMember(artifact.document, "apiVersion", &api_version) ||
+      api_version != "simai.ascend.topology-placement/v1alpha1" ||
+      !StringMember(artifact.document, "kind", &kind) ||
+      kind != "TopologyPlacementAnalysis" ||
+      !StringMember(artifact.document, "schemaSemver", &schema_semver) ||
+      schema_semver != "1.0.0" || metadata == nullptr ||
+      !ObjectHasExactKeys(*metadata, {"id"}) ||
+      !StringMember(*metadata, "id", &parsed.artifact_id) ||
+      !IsSafeRunId(parsed.artifact_id) || spec == nullptr ||
+      !ObjectHasExactKeys(
+          *spec,
+          {"targetWorkloadSha256", "topology", "resourceScenario",
+           "parallelSpace", "frameworkCapabilities", "placementPolicies",
+           "traffic"}) ||
+      !StringMember(
+          *spec, "targetWorkloadSha256", &parsed.target_workload_sha256) ||
+      !IsSha256Identifier(parsed.target_workload_sha256) ||
+      topology == nullptr ||
+      !ObjectHasExactKeys(
+          *topology,
+          {"identity", "scope", "domainSizeRanks", "evidenceRef",
+           "evidence"}) ||
+      !StringMember(*topology, "identity", &parsed.topology_identity) ||
+      !StringMember(*topology, "scope", &parsed.topology_scope) ||
+      !ExactPositiveIntMember(
+          *topology, "domainSizeRanks", &parsed.domain_size_ranks) ||
+      resource == nullptr ||
+      !ObjectHasExactKeys(*resource, {"kind", "spareSemantics"}) ||
+      !StringMember(*resource, "kind", &parsed.resource_scenario) ||
+      !StringMember(
+          *resource, "spareSemantics", &parsed.spare_semantics) ||
+      parallel == nullptr ||
+      !ObjectHasExactKeys(*parallel, {"attention", "moe"}) ||
+      attention == nullptr ||
+      !ObjectHasExactKeys(*attention, {"tp", "cp", "pp"}) ||
+      !ExactPositiveIntMember(*attention, "tp", &parsed.attention_tp) ||
+      !ExactPositiveIntMember(*attention, "cp", &parsed.attention_cp) ||
+      !ExactPositiveIntMember(*attention, "pp", &parsed.attention_pp) ||
+      moe == nullptr ||
+      !ObjectHasExactKeys(*moe, {"etp", "pp", "regularEpValues"}) ||
+      !ExactPositiveIntMember(*moe, "etp", &parsed.moe_etp) ||
+      !ExactPositiveIntMember(*moe, "pp", &parsed.moe_pp) ||
+      capabilities == nullptr ||
+      !ObjectHasExactKeys(*capabilities, {"raggedParallelGroups"}) ||
+      ragged == nullptr ||
+      !ObjectHasExactKeys(*ragged, {"state", "evidenceRef", "evidence"}) ||
+      placement == nullptr ||
+      !ObjectHasExactKeys(*placement, {"kinds", "flatRandomSeed"}) ||
+      traffic == nullptr ||
+      !ObjectHasExactKeys(
+          *traffic, {"semantics", "messageBytesPerRank", "unit"}) ||
+      !StringMember(*traffic, "semantics", &traffic_semantics) ||
+      traffic_semantics != "HCCL_ALLTOALL_TOTAL_SEND_BYTES" ||
+      !ExactPositiveUint64Member(
+          *traffic,
+          "messageBytesPerRank",
+          &parsed.message_bytes_per_rank) ||
+      !StringMember(*traffic, "unit", &traffic_unit) || traffic_unit != "B") {
+    Reject(
+        contract,
+        "TOPOLOGY_PLACEMENT_SCHEMA_INVALID",
+        "The topology placement artifact schema is invalid.",
+        "Use the exact v1alpha1 topology, resource, grid, placement, and traffic fields.");
+    return false;
+  }
+
+  const JsonValue* topology_evidence = Member(*topology, "evidence");
+  std::string topology_evidence_ref;
+  bool topology_hardware_available = false;
+  if (!StringMember(
+          *topology, "evidenceRef", &topology_evidence_ref) ||
+      topology_evidence == nullptr ||
+      topology_evidence->type != JsonValue::Type::Array ||
+      topology_evidence->array.size() != 1U ||
+      !A2EvidenceRecordIsExact(
+          topology_evidence->array.front(),
+          &parsed.topology_evidence.ref,
+          &parsed.topology_evidence.evidence_class,
+          &parsed.topology_evidence.readiness,
+          &topology_hardware_available) ||
+      topology_evidence_ref != parsed.topology_evidence.ref) {
+    Reject(
+        contract,
+        "TOPOLOGY_IDENTITY_EVIDENCE_INVALID",
+        "The topology identity evidence is unresolved or inconsistent.",
+        "Bind one exact evidence record to this topology identity.");
+    return false;
+  }
+
+  const JsonValue* ep_values = Member(*moe, "regularEpValues");
+  if (ep_values == nullptr || ep_values->type != JsonValue::Type::Array ||
+      ep_values->array.empty()) {
+    Reject(
+        contract,
+        "PARALLEL_GRID_SCHEMA_INVALID",
+        "The MoE EP values are missing or invalid.",
+        "Provide exact positive integer EP values.");
+    return false;
+  }
+  for (const JsonValue& value : ep_values->array) {
+    uint64_t ep = 0U;
+    if (!ExactUnsignedDecimal(value, 2048U, false, &ep)) {
+      Reject(
+          contract,
+          "PARALLEL_GRID_SCHEMA_INVALID",
+          "A MoE EP value is invalid.",
+          "Use exact positive integer EP values no larger than 2048.");
+      return false;
+    }
+    parsed.ep_values.push_back(static_cast<int>(ep));
+  }
+
+  const JsonValue* placement_kinds = Member(*placement, "kinds");
+  if (placement_kinds == nullptr ||
+      placement_kinds->type != JsonValue::Type::Array ||
+      placement_kinds->array.empty() ||
+      !ExactNonNegativeUint64Member(
+          *placement, "flatRandomSeed", &parsed.flat_random_seed)) {
+    Reject(
+        contract,
+        "PLACEMENT_POLICY_SCHEMA_INVALID",
+        "The placement policy set is invalid.",
+        "Provide FLAT_RANDOM and TOPOLOGY_AWARE with a uint64 seed.");
+    return false;
+  }
+  for (const JsonValue& value : placement_kinds->array) {
+    if (value.type != JsonValue::Type::String) {
+      Reject(
+          contract,
+          "PLACEMENT_POLICY_SCHEMA_INVALID",
+          "A placement policy is not a string.",
+          "Use FLAT_RANDOM and TOPOLOGY_AWARE exactly.");
+      return false;
+    }
+    if (value.string == "FLAT_RANDOM") {
+      parsed.placement_kinds.push_back(TopologyPlacementKind::FlatRandom);
+    } else if (value.string == "TOPOLOGY_AWARE") {
+      parsed.placement_kinds.push_back(TopologyPlacementKind::TopologyAware);
+    } else {
+      Reject(
+          contract,
+          "PLACEMENT_POLICY_SCHEMA_INVALID",
+          "A placement policy is unsupported.",
+          "Use FLAT_RANDOM and TOPOLOGY_AWARE exactly.");
+      return false;
+    }
+  }
+
+  const JsonValue* ragged_evidence = Member(*ragged, "evidence");
+  std::string ragged_state;
+  std::string ragged_evidence_ref;
+  if (!StringMember(*ragged, "state", &ragged_state) ||
+      !StringMember(*ragged, "evidenceRef", &ragged_evidence_ref) ||
+      ragged_evidence == nullptr ||
+      ragged_evidence->type != JsonValue::Type::Array) {
+    Reject(
+        contract,
+        "RAGGED_FRAMEWORK_CAPABILITY_SCHEMA_INVALID",
+        "The ragged framework capability contract is invalid.",
+        "Use NOT_PROVIDED with no evidence or SUPPORTED with one verified record.");
+    return false;
+  }
+  if (ragged_state == "NOT_PROVIDED") {
+    if (ragged_evidence_ref != "NOT_PROVIDED" ||
+        !ragged_evidence->array.empty()) {
+      Reject(
+          contract,
+          "RAGGED_FRAMEWORK_CAPABILITY_EVIDENCE_INVALID",
+          "A missing ragged capability cannot carry evidence.",
+          "Use NOT_PROVIDED with evidenceRef NOT_PROVIDED and an empty array.");
+      return false;
+    }
+  } else if (ragged_state == "SUPPORTED") {
+    bool ragged_hardware_available = false;
+    if (ragged_evidence->array.size() != 1U ||
+        !A2EvidenceRecordIsExact(
+            ragged_evidence->array.front(),
+            &parsed.ragged_evidence.ref,
+            &parsed.ragged_evidence.evidence_class,
+            &parsed.ragged_evidence.readiness,
+            &ragged_hardware_available) ||
+        parsed.ragged_evidence.ref != ragged_evidence_ref ||
+        parsed.ragged_evidence.readiness != "FIELD_VERIFIED") {
+      Reject(
+          contract,
+          "RAGGED_FRAMEWORK_CAPABILITY_EVIDENCE_INVALID",
+          "The ragged capability lacks one verified target-framework record.",
+          "Bind explicit FIELD_VERIFIED target-framework capability evidence.");
+      return false;
+    }
+    parsed.ragged_groups_supported = true;
+  } else {
+    Reject(
+        contract,
+        "RAGGED_FRAMEWORK_CAPABILITY_SCHEMA_INVALID",
+        "The ragged capability state is unsupported.",
+        "Use NOT_PROVIDED or SUPPORTED.");
+    return false;
+  }
+
+  if (!contract->target_workload_ready ||
+      parsed.target_workload_sha256 != contract->target_workload_sha256) {
+    RejectUnsupported(
+        contract,
+        "TOPOLOGY_PLACEMENT_TARGET_WORKLOAD_REQUIRED",
+        "Topology placement is not bound to the validated Target Workload Contract.",
+        "Bind the exact #19 Model/Step/Routing/Memory composite digest.");
+    return false;
+  }
+  parsed.routed_experts = contract->target_routed_experts;
+  contract->topology_placement = parsed;
+  TopologyPlacementSummary summary;
+  if (!AnalyzeTopologyPlacements(
+          parsed, TopologyPlacementSha256Identifier, &summary)) {
+    contract->topology_placement_summary = summary;
+    if (summary.failure_reason ==
+        "EXACT_RAGGED_FRAMEWORK_CAPABILITY_REQUIRED") {
+      RejectUnsupported(
+          contract,
+          summary.failure_reason,
+          "This active set requires target-framework ragged group semantics.",
+          "Provide explicit verified evidence for non-uniform groups, shards, and optimizer semantics.");
+    } else {
+      Reject(
+          contract,
+          summary.failure_reason,
+          "The topology, resource, parallel grid, or placement analysis is invalid.",
+          "Correct the stable reject condition and retry.");
+    }
+    return false;
+  }
+  contract->topology_placement_summary = summary;
+  return true;
+}
+
 std::string JsonEscape(const std::string& input) {
   std::ostringstream escaped;
   for (const unsigned char character : input) {
@@ -5848,6 +6184,223 @@ void WriteProjectedA2AResult(
       << ", \"topology_digest\": " << Quote(contract.topology_digest)
       << ", \"evidence_level\": " << Quote(summary.evidence_level)
       << ", \"field_readiness\": " << Quote(summary.field_readiness)
+      << "}}";
+}
+
+void WriteTopologyPlacementResult(
+    std::ostream& output,
+    const AnalyticalRunContract& contract,
+    bool run_valid) {
+  const TopologyPlacementSummary& summary =
+      contract.topology_placement_summary;
+  if (!contract.topology_placement.present) {
+    output << "\"NOT_REQUIRED\"";
+    return;
+  }
+  output
+      << "{\"schema_version\": \"simai.topology-placement-analysis/v1alpha1\", "
+      << "\"mode\": \"TRAFFIC_ONLY\", "
+      << "\"capability\": {\"backend\": \"ANALYTICAL\", "
+      << "\"projector\": \"PROJECTED_A2A_TYPED\", "
+      << "\"endpoint_flows_materialized\": false, "
+      << "\"simulation_flow_support\": \"NOT_PROVIDED\"}, ";
+  if (!run_valid || !summary.ready) {
+    output << "\"readiness\": \"UNKNOWN\", \"state\": \"UNSUPPORTED\", "
+           << "\"reject_code\": "
+           << Quote(summary.failure_reason.empty()
+                        ? contract.reject_code
+                        : summary.failure_reason)
+           << "}";
+    return;
+  }
+  output
+      << "\"readiness\": \"READY\", \"state\": \"VALID\", "
+      << "\"topology_identity\": {\"kind\": "
+      << Quote(summary.topology_identity)
+      << ", \"scope\": " << Quote(summary.topology_scope)
+      << ", \"domain_size_ranks\": " << summary.domain_size_ranks
+      << ", \"digest\": " << Quote(summary.topology_digest)
+      << ", \"evidence\": {\"ref\": "
+      << Quote(summary.topology_evidence.ref)
+      << ", \"class\": "
+      << Quote(summary.topology_evidence.evidence_class)
+      << ", \"readiness\": "
+      << Quote(summary.topology_evidence.readiness) << "}}, "
+      << "\"resource_scenario\": {\"kind\": "
+      << Quote(summary.resource_scenario)
+      << ", \"active_ranks\": " << summary.active_ranks
+      << ", \"capacity_ranks\": " << summary.capacity_ranks
+      << ", \"spare_ranks\": " << summary.spare_ranks
+      << ", \"spare_semantics\": " << Quote(summary.spare_semantics)
+      << ", \"active_domain_count\": " << summary.domain_count
+      << ", \"full_domain_count\": " << summary.full_domain_count
+      << ", \"partial_domain_active_ranks\": "
+      << summary.partial_domain_active_ranks << "}, "
+      << "\"framework_capability\": {\"ragged_parallel_groups\": {"
+      << "\"state\": "
+      << Quote(summary.ragged_groups_supported ? "SUPPORTED" : "NOT_PROVIDED")
+      << ", \"evidence\": {\"ref\": "
+      << Quote(summary.ragged_evidence.ref)
+      << ", \"class\": " << Quote(summary.ragged_evidence.evidence_class)
+      << ", \"readiness\": " << Quote(summary.ragged_evidence.readiness)
+      << "}}}, "
+      << "\"parallel_grid_contract\": {"
+      << "\"attention_formula\": \"N=TP*CP*DP*PP\", "
+      << "\"moe_formula\": \"N=ETP*EP*EDP*PP\", "
+      << "\"routed_experts\": "
+      << contract.topology_placement.routed_experts
+      << ", \"ep_must_divide_routed_experts\": true, "
+      << "\"regular_ep_coverage\": [";
+  for (size_t index = 0U;
+       index < contract.topology_placement.ep_values.size();
+       ++index) {
+    if (index != 0U) {
+      output << ", ";
+    }
+    output << contract.topology_placement.ep_values[index];
+  }
+  output << "]}, \"candidates\": [";
+  const size_t domain_count = static_cast<size_t>(summary.domain_count);
+  for (size_t index = 0U; index < summary.candidates.size(); ++index) {
+    if (index != 0U) {
+      output << ", ";
+    }
+    const TopologyPlacementCandidateSummary& candidate =
+        summary.candidates[index];
+    output
+        << "{\"id\": " << Quote(candidate.id)
+        << ", \"candidate_digest\": "
+        << Quote(candidate.candidate_digest)
+        << ", \"placement\": "
+        << Quote(TopologyPlacementKindName(candidate.placement))
+        << ", \"rank_map\": {\"digest\": "
+        << Quote(candidate.rank_map_digest)
+        << ", \"algorithm\": " << Quote(candidate.rank_map_algorithm)
+        << ", \"flat_random_seed\": " << candidate.flat_random_seed
+        << "}, \"attention_grid\": {\"tp\": "
+        << candidate.attention_tp << ", \"cp\": "
+        << candidate.attention_cp << ", \"dp\": "
+        << candidate.attention_dp << ", \"pp\": "
+        << candidate.attention_pp << ", \"product\": "
+        << static_cast<int64_t>(candidate.attention_tp) *
+               candidate.attention_cp * candidate.attention_dp *
+               candidate.attention_pp
+        << "}, \"moe_grid\": {\"etp\": " << candidate.moe_etp
+        << ", \"ep\": " << candidate.moe_ep
+        << ", \"edp\": " << candidate.moe_edp
+        << ", \"pp\": " << candidate.moe_pp
+        << ", \"ragged\": " << (candidate.ragged ? "true" : "false")
+        << ", \"full_ep_groups\": " << candidate.full_ep_groups
+        << ", \"partial_ep_group_ranks\": "
+        << candidate.partial_ep_group_ranks << "}, "
+        << "\"communication_groups\": [";
+    for (size_t group_index = 0U;
+         group_index < candidate.communication_groups.size();
+         ++group_index) {
+      if (group_index != 0U) {
+        output << ", ";
+      }
+      const TopologyPlacementCommunicationGroup& group =
+          candidate.communication_groups[group_index];
+      output << "{\"grid\": " << Quote(group.grid)
+             << ", \"representation\": " << Quote(group.representation)
+             << ", \"membership_formula\": "
+             << Quote(group.membership_formula)
+             << ", \"membership_digest\": "
+             << Quote(group.membership_digest) << "}";
+    }
+    output << "], \"domain_matrix_B\": [";
+    for (size_t source = 0U; source < domain_count; ++source) {
+      if (source != 0U) {
+        output << ", ";
+      }
+      output << "[";
+      for (size_t destination = 0U; destination < domain_count;
+           ++destination) {
+        if (destination != 0U) {
+          output << ", ";
+        }
+        output << candidate.domain_matrix_bytes[
+            source * domain_count + destination];
+      }
+      output << "]";
+    }
+    output << "], \"global_bytes\": " << candidate.global_bytes
+           << ", \"cross_domain_bytes\": "
+           << candidate.cross_domain_bytes
+           << ", \"local_expert_hit\": " << std::setprecision(17)
+           << candidate.local_expert_hit
+           << ", \"shared_resource_loads\": ["
+           << "{\"id\": \"intra-topology-domain\", "
+           << "\"scope\": \"INTRA_DOMAIN\", \"offered_load_B\": "
+           << candidate.intra_domain_bytes << "}, "
+           << "{\"id\": \"inter-topology-domain-shared-fabric\", "
+           << "\"scope\": \"INTER_DOMAIN\", \"offered_load_B\": "
+           << candidate.cross_domain_bytes << "}]}";
+  }
+  output << "], \"placement_pairs\": [";
+  for (size_t index = 0U; index < summary.placement_pairs.size(); ++index) {
+    if (index != 0U) {
+      output << ", ";
+    }
+    const TopologyPlacementPairSummary& pair = summary.placement_pairs[index];
+    output << "{\"ep\": " << pair.ep
+           << ", \"flat_candidate\": " << Quote(pair.flat_candidate)
+           << ", \"topology_aware_candidate\": "
+           << Quote(pair.topology_aware_candidate)
+           << ", \"flat_cross_domain_B\": "
+           << pair.flat_cross_domain_bytes
+           << ", \"topology_aware_cross_domain_B\": "
+           << pair.topology_aware_cross_domain_bytes
+           << ", \"topology_aware_cross_domain_reduction_B\": "
+           << pair.topology_aware_cross_domain_reduction_bytes
+           << ", \"flat_local_expert_hit\": " << std::setprecision(17)
+           << pair.flat_local_expert_hit
+           << ", \"topology_aware_local_expert_hit\": "
+           << std::setprecision(17) << pair.topology_aware_local_expert_hit
+           << "}";
+  }
+  output << "], \"expert_parallel_pairs\": [";
+  for (size_t index = 0U;
+       index < summary.expert_parallel_pairs.size();
+       ++index) {
+    if (index != 0U) {
+      output << ", ";
+    }
+    const TopologyPlacementExpertPairSummary& pair =
+        summary.expert_parallel_pairs[index];
+    output << "{\"placement\": "
+           << Quote(TopologyPlacementKindName(pair.placement))
+           << ", \"global_ep\": " << pair.global_ep
+           << ", \"local_ep\": " << pair.local_ep
+           << ", \"global_candidate\": " << Quote(pair.global_candidate)
+           << ", \"local_candidate\": " << Quote(pair.local_candidate)
+           << ", \"local_cross_domain_reduction_B\": "
+           << pair.local_cross_domain_reduction_bytes
+           << ", \"global_local_expert_hit\": "
+           << std::setprecision(17) << pair.global_local_expert_hit
+           << ", \"local_local_expert_hit\": "
+           << std::setprecision(17) << pair.local_local_expert_hit << "}";
+  }
+  output
+      << "], \"resident_state\": {\"rank_maps_resident\": 0, "
+      << "\"endpoint_flows_resident\": 0, "
+      << "\"candidate_domain_matrix_cells\": "
+      << summary.candidates.size() * domain_count * domain_count
+      << ", \"maximum_projector_rank_state\": "
+      << summary.maximum_projector_rank_state
+      << ", \"maximum_projector_domain_cells\": "
+      << summary.maximum_projector_domain_cells
+      << ", \"complexity\": \"O(C*(P + G*D^2) + C*D^2)\"}, "
+      << "\"determinism\": {\"ordering\": "
+      << "\"PLACEMENT_DECLARATION_THEN_EP_ASCENDING\", "
+      << "\"semantic_inputs\": \"CONTENT_ADDRESSED\"}, "
+      << "\"provenance\": {\"artifact_id\": "
+      << Quote(summary.artifact_id)
+      << ", \"artifact_sha256\": " << Quote(summary.artifact_sha256)
+      << ", \"target_workload_sha256\": "
+      << Quote(summary.target_workload_sha256)
+      << ", \"artifact_bytes_read\": " << summary.artifact_bytes_read
       << "}}";
 }
 
@@ -6088,6 +6641,9 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
         !ApplyTargetMemoryGates(&contract)) {
       return contract;
     }
+  }
+  if (!LoadTopologyPlacement(root, &contract)) {
+    return contract;
   }
 
   const JsonValue* device_profile = Member(root, "device_profile");
@@ -6402,7 +6958,11 @@ bool WriteAnalyticalResultManifest(
          << "    \"a2_ground_truth_run_sha256\": "
          << Quote(contract.a2_ground_truth_run_sha256) << ",\n"
          << "    \"a2_ground_truth_result_sha256\": "
-         << Quote(contract.a2_ground_truth_result_sha256) << "\n"
+         << Quote(contract.a2_ground_truth_result_sha256) << ",\n"
+         << "    \"topology_placement_artifact_sha256\": "
+         << Quote(contract.topology_placement.artifact_sha256) << ",\n"
+         << "    \"topology_identity_sha256\": "
+         << Quote(contract.topology_placement_summary.topology_digest) << "\n"
          << "  },\n"
          << "  \"evidence\": {\n"
          << "    \"workload\": {\"level\": "
@@ -6464,7 +7024,14 @@ bool WriteAnalyticalResultManifest(
          << Quote(contract.a2_ground_truth_evidence_level)
          << ", \"digest\": " << Quote(contract.a2_ground_truth_result_sha256)
          << ", \"readiness\": "
-         << Quote(contract.a2_ground_truth_field_readiness) << "}\n"
+         << Quote(contract.a2_ground_truth_field_readiness) << "},\n"
+         << "    \"topology_placement\": {\"level\": "
+         << Quote(contract.topology_placement.topology_evidence.evidence_class)
+         << ", \"digest\": "
+         << Quote(contract.topology_placement.artifact_sha256)
+         << ", \"readiness\": "
+         << Quote(contract.topology_placement.topology_evidence.readiness)
+         << "}\n"
          << "  },\n"
          << "  \"readiness\": {\n"
          << "    \"contract\": " << Quote(valid ? "READY" : "BLOCKED") << ",\n"
@@ -6541,6 +7108,13 @@ bool WriteAnalyticalResultManifest(
          << "    \"a2_ground_truth\": "
          << Quote(contract.a2_ground_truth_present
                       ? (contract.a2_ground_truth_ready ? "READY" : "BLOCKED")
+                      : "NOT_REQUIRED")
+         << ",\n"
+         << "    \"topology_placement\": "
+         << Quote(contract.topology_placement.present
+                      ? (valid && contract.topology_placement_summary.ready
+                             ? "READY"
+                             : "UNKNOWN")
                       : "NOT_REQUIRED")
          << "\n"
          << "  },\n"
@@ -6808,6 +7382,9 @@ bool WriteAnalyticalResultManifest(
   } else {
     output << "\"NOT_REQUIRED\",\n";
   }
+  output << "    \"topology_placement_analysis\": ";
+  WriteTopologyPlacementResult(output, contract, valid);
+  output << ",\n";
   output
          << "    \"useful_throughput_tokens_per_s\": \"UNKNOWN\",\n"
          << "    \"top5\": \"UNKNOWN\",\n"

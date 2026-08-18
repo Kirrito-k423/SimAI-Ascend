@@ -12,6 +12,7 @@
 
 #include "A2GroundTruth.h"
 #include "HcclCostModel.h"
+#include "TopologyPlacement.h"
 #include "astra-sim/system/Common.hh"
 
 namespace SimAIContract {
@@ -170,6 +171,8 @@ struct AnalyticalRunContract {
   std::string a2_derived_cost_model_sha256 = "UNKNOWN";
   int a2_raw_observation_count = 0;
   std::vector<A2GroundTruthScenarioSummary> a2_scenarios;
+  TopologyPlacementConfig topology_placement;
+  TopologyPlacementSummary topology_placement_summary;
   HcclCostModelConfig hccl_cost_model;
   bool workload_digest_verified = false;
   LegacyGpuRunConfig legacy_gpu;
