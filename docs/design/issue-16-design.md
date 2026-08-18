@@ -226,7 +226,7 @@ SimAI_analytical \
 | 2. 版本/状态/拒绝码/摘要/provenance/evidence/readiness/UNKNOWN | 正例逐字段断言；摘要由 Python `hashlib` 独立计算；摘要漂移负例断言 `WORKLOAD_DIGEST_MISMATCH` 与 workload `BLOCKED` |
 | 3. 无 Ascend Profile 的 GPU workload 与旧 CLI | 正例选择 `LEGACY_CALBUSBW`；`test_minimal_gpu_workload_keeps_legacy_cli_compatible` exit 0 |
 | 4. Ascend 与 legacy GPU 冲突 fail closed | `test_conflicting_device_selectors_fail_closed`：exit 2 + `DEVICE_SELECTOR_CONFLICT` |
-| 5. 真实进程黑盒 seam | 测试只观察 subprocess return code 与 Result Manifest；PATH 与相对路径启动都独立校验真实二进制摘要；不可写负例只断言 exit 4；旧 CLI 只观察 return code |
+| 5. 真实进程黑盒 seam | 测试只观察 subprocess return code 与 Result Manifest；PATH 启动与仓外干净构建产物的相对路径启动都独立校验真实二进制摘要；不可写负例只断言 exit 4；旧 CLI 只观察 return code |
 | 6. artifact 脱敏 | 正/负结果断言无仓库/fixture path 与 IPv4；fixture 全为合成公开值；提交前另跑敏感信息扫描 |
 
 Independent verification 应从干净构建产物运行上述正/负 fixture，并独立重算 Run/workload/binary SHA-256。`test_same_manifest_has_deterministic_result_fields` 通过真实进程对同一 manifest 连续运行两次，并逐字段比较两个 Result Manifest，落实父规格的确定性规则。

@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -235,9 +236,14 @@ class AnalyticalRunContractTest(unittest.TestCase):
             "sha256:" + hashlib.sha256(self.binary.read_bytes()).hexdigest(),
         )
 
-    def test_relative_launch_hashes_the_resolved_analytical_binary(self):
-        relative_binary = self.binary.relative_to(REPO_ROOT)
+    def test_external_binary_relative_launch_has_resolved_digest(self):
         with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:
+            external_binary = Path(temp_dir) / "SimAI_analytical"
+            shutil.copy2(self.binary, external_binary)
+            expected_binary_sha256 = (
+                "sha256:" + hashlib.sha256(external_binary.read_bytes()).hexdigest()
+            )
+            relative_binary = os.path.relpath(external_binary, REPO_ROOT)
             result_path = Path(temp_dir) / "result.json"
             completed = subprocess.run(
                 [
@@ -259,7 +265,7 @@ class AnalyticalRunContractTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 0)
         self.assertEqual(
             result["provenance"]["binary_sha256"],
-            "sha256:" + hashlib.sha256(self.binary.read_bytes()).hexdigest(),
+            expected_binary_sha256,
         )
 
     def test_same_manifest_has_deterministic_result_fields(self):
