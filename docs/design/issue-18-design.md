@@ -158,7 +158,7 @@ validator 拥有 schema、digest、单位和 evidence 规则；provider 不再�
 }
 ```
 
-DerivedCostModel 的 `routingDigest`、Run reference digest 和 routing 文件内容摘要必须三方相等。routing 使用 `HCCL_SEND_COUNTS_BYTES`、单位 `B`、精确 `rankCount × rankCount` matrix；对角必须为 0，值必须是 JSON 安全范围内的非负整数。Profile/topology/rank 不一致或累计溢出一律拒绝。当前 dense JSON 路径在读取/JSON 物化之前检查文件大小，上限为 1 MiB；解析后、分配 receive totals 之前检查 `rankCount <= 256`、行列各不超过 256 且总 cells 不超过 65,536。越界分别返回 `HCCL_ROUTING_ARTIFACT_TOO_LARGE` 和 `HCCL_ROUTING_CAPACITY_EXCEEDED`。这只是有界 dense Analytical 输入，不是后续大规模 streaming/projected routing。
+DerivedCostModel 的 `routingDigest`、Run reference digest 和 routing 文件内容摘要必须三方相等。routing 使用 `HCCL_SEND_COUNTS_BYTES`、单位 `B`、精确 `rankCount × rankCount` matrix；对角必须为 0，值必须是 JSON 安全范围内的非负整数。Profile/topology/rank 不一致或累计溢出一律拒绝。当前 dense JSON 路径从同一个输入流最多读取 `1 MiB + 1` 字节：恰好 1 MiB 可继续 digest/JSON 校验，多出一个字节立即返回 `HCCL_ROUTING_ARTIFACT_TOO_LARGE`，不依赖 seek/tellg，也没有预检后重新打开产生的 TOCTOU 窗口。解析后、分配 receive totals 之前检查 `rankCount <= 256`、行列各不超过 256 且总 cells 不超过 65,536；容量越界返回 `HCCL_ROUTING_CAPACITY_EXCEEDED`。这只是有界 dense Analytical 输入，不是后续大规模 streaming/projected routing。
 
 DerivedCostModel `inputSamples[]` 可以引用多个不可变 RawObservation。入口逐个执行 path/digest/JSON/schema/domain/timing 残差校验；任一失败都会阻断整个模型。Result 的 primary raw digest 保持 #17 字段兼容，完整 sample 引用集合同时受 DerivedCostModel 自身摘要保护。
 
@@ -220,7 +220,7 @@ AG/RS/A2A algbw = busbw × P / (P-1)
 
 A2AV 不接受单一 legacy busbw row。Result `provenance.cost_model_adapter=EXPLICIT_LEGACY_BUSBW` 明确记录适配发生；普通模型为 `NONE`。不存在任何按列位置、`GB/s` 文本、相邻消息或默认 rank 的隐式兼容。
 
-legacy GPU workload 同样不允许 `ALLTOALLV[_*]` 进入 `cal_busbw`。Run Contract 在启动 Analytical engine 前按完整 workload token 检出并返回 `UNSUPPORTED/LEGACY_ALLTOALLV_UNSUPPORTED`；其他 legacy collective 保持 #16 行为。
+legacy GPU workload 同样不允许 AllToAllV 进入 `cal_busbw`。Run Contract 与 `Workload` 共用 typed decoder，只接受通信列中的完整枚举 `ALLTOALLV`、`ALLTOALLV_EP`、`ALLTOALLV_DP_EP`；Run Contract 按每层固定结构只读取 fp/ig/wg 三个通信字段，因此 layer ID 或名称不会误触发。支持的 A2AV token 返回 `UNSUPPORTED/LEGACY_ALLTOALLV_UNSUPPORTED`，未知 `ALLTOALLV*` 变体返回 `INVALID_INPUT/LEGACY_COLLECTIVE_TOKEN_INVALID`，`Workload` 也不会再把未知变体按前缀降级为 A2AV 或 AllToAll。其他 legacy collective 保持 #16 行为。
 
 ### 4.6 单请求 Result 闭包
 
@@ -259,7 +259,7 @@ legacy GPU workload 同样不允许 `ALLTOALLV[_*]` 进入 `cal_busbw`。Run Con
 | 3. known point、interval boundary、monotonicity | 4096/65535/65536/1048576 四点测试断言精确 ns，且结果排序不下降；跨段下降 1 ns 的模型稳定拒绝 |
 | 4. legacy busbw 仅显式 adapter | 有效 adapter 断言 provenance 与换算结果；缺 adapter、缺列、`GB/s`、message-domain mismatch 分别断言独立拒绝码和 UNKNOWN |
 | 5. routing/topology/cost 可区分 UNKNOWN/readiness | 三个负例分别断言独立 reject code、`UNKNOWN/READY/NOT_REQUIRED/BLOCKED` 组合和 UNKNOWN 定量结果 |
-| 6. 真实进程与 legacy 回归 | 同一完整 contract suite 包含 #16 legacy GPU/CLI、#17 AR、五类消息矩阵、legacy A2AV fail-closed 和 #18 全部新增行为；最终数量以验证命令输出为准 |
+| 6. 真实进程与 legacy 回归 | 同一完整 contract suite 包含 #16 legacy GPU/CLI、#17 AR、五类消息矩阵、legacy A2AV typed decode/fail-closed、non-seekable routing 上界和 #18 全部新增行为；最终数量以验证命令输出为准 |
 
 独立 message matrix 使用同一固定 Profile/拓扑和确定性 synthetic model，改变 collective 与 message point；所有 Run reference 重新计算 SHA-256。Result 反向核对 operation/payload/timing/traffic/provenance，避免由实现内部状态自证。
 

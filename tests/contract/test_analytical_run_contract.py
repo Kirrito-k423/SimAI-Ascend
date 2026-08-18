@@ -144,7 +144,14 @@ class AnalyticalRunContractTest(unittest.TestCase):
             result = json.loads(result_path.read_text())
         return completed, result
 
-    def run_generated_legacy_contract(self, workload_token):
+    def run_generated_legacy_contract(
+        self,
+        workload_token,
+        *,
+        layer_id="legacy_layer",
+        input_gradient_token="NONE",
+        weight_gradient_token="NONE",
+    ):
         manifest = json.loads(
             (FIXTURES / "minimal_legacy_gpu_run.json").read_text()
         )
@@ -156,8 +163,9 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 "vpp: 1 ga: 1 all_gpus: 1 checkpoints: 0 "
                 "checkpoint_initiates: 0 pp_comm 0\n"
                 "1\n"
-                f"legacy_layer\t-1\t10\t{workload_token}\t1048576"
-                "\t10\tNONE\t0\t10\tNONE\t0\t10\n"
+                f"{layer_id}\t-1\t10\t{workload_token}\t1048576"
+                f"\t10\t{input_gradient_token}\t0"
+                f"\t10\t{weight_gradient_token}\t0\t10\n"
             )
             manifest["workload"] = {
                 "path": str(workload_path),
@@ -199,6 +207,8 @@ class AnalyticalRunContractTest(unittest.TestCase):
         layer_count=1,
         routing_padding_bytes=0,
         routing_rank_override=None,
+        routing_total_bytes=None,
+        routing_via_stdin=False,
     ):
         """Build immutable synthetic artifacts, then observe the real process."""
         profile_path = FIXTURES / "minimal_ascend_profile.json"
@@ -306,17 +316,30 @@ class AnalyticalRunContractTest(unittest.TestCase):
                         ],
                     },
                 }
-                if routing_padding_bytes:
+                if routing_padding_bytes or routing_total_bytes is not None:
                     routing["spec"]["padding"] = "x" * routing_padding_bytes
                 if routing_rank_override is not None:
                     routing["spec"]["rankCount"] = routing_rank_override
+                if routing_total_bytes is not None:
+                    empty_padding = json.dumps(routing, indent=2) + "\n"
+                    padding_bytes = routing_total_bytes - len(
+                        empty_padding.encode()
+                    )
+                    self.assertGreaterEqual(padding_bytes, 0)
+                    routing["spec"]["padding"] = "x" * padding_bytes
+                routing_content = json.dumps(routing, indent=2) + "\n"
+                if routing_total_bytes is not None:
+                    self.assertEqual(
+                        len(routing_content.encode()), routing_total_bytes
+                    )
                 routing_path = run_directory / "routing.json"
-                routing_path.write_text(json.dumps(routing, indent=2) + "\n")
+                if not routing_via_stdin:
+                    routing_path.write_text(routing_content)
                 routing_digest = "sha256:" + hashlib.sha256(
-                    routing_path.read_bytes()
+                    routing_content.encode()
                 ).hexdigest()
                 routing_reference = {
-                    "path": str(routing_path),
+                    "path": "/dev/stdin" if routing_via_stdin else str(routing_path),
                     "sha256": routing_digest,
                 }
                 raw["spec"]["payload"]["bytesPerRank"].pop("uniformValue")
@@ -430,6 +453,7 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                input=routing_content if routing_via_stdin else None,
                 timeout=30,
                 check=False,
             )
@@ -656,6 +680,42 @@ class AnalyticalRunContractTest(unittest.TestCase):
         self.assertEqual(result["reject_code"], "LEGACY_ALLTOALLV_UNSUPPORTED")
         self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
         self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
+
+    def test_legacy_layer_identifier_is_not_decoded_as_a_collective(self):
+        for layer_id in ("ALLTOALLV", "ALLTOALLV_debug"):
+            with self.subTest(layer_id=layer_id):
+                completed, result = self.run_generated_legacy_contract(
+                    "NONE", layer_id=layer_id
+                )
+
+                self.assertEqual(completed.returncode, 0)
+                self.assertEqual(result["status"], "VALID")
+                self.assertEqual(result["reject_code"], "NONE")
+
+    def test_legacy_unknown_alltoallv_variant_is_invalid_input(self):
+        cases = (
+            {"workload_token": "ALLTOALLVXYZ"},
+            {
+                "workload_token": "NONE",
+                "input_gradient_token": "ALLTOALLVXYZ",
+            },
+            {
+                "workload_token": "NONE",
+                "weight_gradient_token": "ALLTOALLVXYZ",
+            },
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                completed, result = self.run_generated_legacy_contract(**case)
+
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(result["status"], "INVALID_INPUT")
+                self.assertEqual(
+                    result["reject_code"],
+                    "LEGACY_COLLECTIVE_TOKEN_INVALID",
+                )
+                self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+                self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
 
     def test_minimal_ascend_allreduce_uses_profiled_hccl_cost(self):
         completed, result, _ = self.run_contract(
@@ -900,6 +960,70 @@ class AnalyticalRunContractTest(unittest.TestCase):
             over_result["reject_code"], "HCCL_ROUTING_ARTIFACT_TOO_LARGE"
         )
         self.assertEqual(over_result["results"]["timing_ns"], "UNKNOWN")
+
+    def test_alltoallv_routing_artifact_exact_byte_limit(self):
+        routing_matrix = [
+            [0, 100000, 200000, 300000],
+            [150000, 0, 250000, 350000],
+            [175000, 225000, 0, 275000],
+            [325000, 125000, 225000, 0],
+        ]
+        at_limit_completed, at_limit_result = self.run_generated_hccl_contract(
+            collective="ALL_TO_ALL_V",
+            workload_token="ALLTOALLV",
+            payload_semantics="HCCL_ALLTOALLV_COUNTS_MATRIX",
+            reduction="NONE",
+            traffic_algorithm="VARIABLE_DIRECT_EXCHANGE",
+            message_bytes=750000,
+            routing_matrix=routing_matrix,
+            routing_total_bytes=1024 * 1024,
+        )
+        self.assertEqual(at_limit_completed.returncode, 0)
+        self.assertEqual(at_limit_result["status"], "VALID")
+
+        over_limit_completed, over_limit_result = (
+            self.run_generated_hccl_contract(
+                collective="ALL_TO_ALL_V",
+                workload_token="ALLTOALLV",
+                payload_semantics="HCCL_ALLTOALLV_COUNTS_MATRIX",
+                reduction="NONE",
+                traffic_algorithm="VARIABLE_DIRECT_EXCHANGE",
+                message_bytes=750000,
+                routing_matrix=routing_matrix,
+                routing_total_bytes=1024 * 1024 + 1,
+            )
+        )
+        self.assertEqual(over_limit_completed.returncode, 2)
+        self.assertEqual(over_limit_result["status"], "INVALID_INPUT")
+        self.assertEqual(
+            over_limit_result["reject_code"],
+            "HCCL_ROUTING_ARTIFACT_TOO_LARGE",
+        )
+
+    def test_alltoallv_nonseekable_routing_cannot_bypass_byte_limit(self):
+        completed, result = self.run_generated_hccl_contract(
+            collective="ALL_TO_ALL_V",
+            workload_token="ALLTOALLV",
+            payload_semantics="HCCL_ALLTOALLV_COUNTS_MATRIX",
+            reduction="NONE",
+            traffic_algorithm="VARIABLE_DIRECT_EXCHANGE",
+            message_bytes=750000,
+            routing_matrix=[
+                [0, 100000, 200000, 300000],
+                [150000, 0, 250000, 350000],
+                [175000, 225000, 0, 275000],
+                [325000, 125000, 225000, 0],
+            ],
+            routing_total_bytes=1101348,
+            routing_via_stdin=True,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(
+            result["reject_code"], "HCCL_ROUTING_ARTIFACT_TOO_LARGE"
+        )
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
 
     def test_alltoallv_routing_rank_above_dense_limit_is_rejected(self):
         completed, result = self.run_generated_hccl_contract(

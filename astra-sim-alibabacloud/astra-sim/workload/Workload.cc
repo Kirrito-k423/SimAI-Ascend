@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
 #include "Workload.hh"
 #include "CSVWriter.hh"
 #include "Layer.hh"
+#include "WorkloadCollectiveDecoder.hh"
 #include "astra-sim/system/MockNcclLog.h"
 
 namespace AstraSim {
@@ -1315,6 +1316,12 @@ bool Workload::initialize_workload(std::string name) {
     MockNccl::GroupType fp_group_type = MockNccl::GroupType::NONE;
     MockNccl::GroupType ig_group_type = MockNccl::GroupType::NONE;
     MockNccl::GroupType wg_group_type = MockNccl::GroupType::NONE;
+    const WorkloadAllToAllVToken wg_alltoallv =
+        DecodeWorkloadAllToAllVToken(wg_comm_type_s);
+    const WorkloadAllToAllVToken ig_alltoallv =
+        DecodeWorkloadAllToAllVToken(ig_comm_type_s);
+    const WorkloadAllToAllVToken fp_alltoallv =
+        DecodeWorkloadAllToAllVToken(fp_comm_type_s);
     if (wg_comm_type_s.substr(0,9) == "ALLREDUCE") {
       wg_type = ComType::All_Reduce;
       if(wg_comm_type_s == "ALLREDUCE"){
@@ -1326,17 +1333,20 @@ bool Workload::initialize_workload(std::string name) {
       } else{
         wg_group_type = MockNccl::GroupType::NONE;
       }
-    } else if (wg_comm_type_s.substr(0,9) == "ALLTOALLV") {
+    } else if (IsSupportedWorkloadAllToAllVToken(wg_alltoallv)) {
       wg_type = ComType::All_to_Allv;
-      if(wg_comm_type_s == "ALLTOALLV"){
+      if (wg_alltoallv == WorkloadAllToAllVToken::Default) {
         wg_group_type = MockNccl::GroupType::DP;
-      } else if(wg_comm_type_s == "ALLTOALLV_EP"){
+      } else if (
+          wg_alltoallv == WorkloadAllToAllVToken::ExpertParallel) {
         wg_group_type = MockNccl::GroupType::EP;
-      } else if(wg_comm_type_s == "ALLTOALLV_DP_EP"){
+      } else if (
+          wg_alltoallv ==
+          WorkloadAllToAllVToken::DataAndExpertParallel) {
         wg_group_type = MockNccl::GroupType::DP_EP;
-      } else{
-        wg_group_type = MockNccl::GroupType::NONE;
       }
+    } else if (wg_alltoallv == WorkloadAllToAllVToken::InvalidVariant) {
+      wg_type = ComType::None;
     } else if (wg_comm_type_s.substr(0,8) == "ALLTOALL") {
       wg_type = ComType::All_to_All;
       if(wg_comm_type_s == "ALLTOALL"){
@@ -1396,17 +1406,20 @@ bool Workload::initialize_workload(std::string name) {
       } else{
         ig_group_type = MockNccl::GroupType::NONE;
       }
-    } else if (ig_comm_type_s.substr(0,9) == "ALLTOALLV") {
+    } else if (IsSupportedWorkloadAllToAllVToken(ig_alltoallv)) {
       ig_type = ComType::All_to_Allv;
-      if(ig_comm_type_s == "ALLTOALLV"){
+      if (ig_alltoallv == WorkloadAllToAllVToken::Default) {
         ig_group_type = MockNccl::GroupType::TP;
-      } else if(ig_comm_type_s == "ALLTOALLV_EP"){
+      } else if (
+          ig_alltoallv == WorkloadAllToAllVToken::ExpertParallel) {
         ig_group_type = MockNccl::GroupType::EP;
-      } else if(ig_comm_type_s == "ALLTOALLV_DP_EP"){
+      } else if (
+          ig_alltoallv ==
+          WorkloadAllToAllVToken::DataAndExpertParallel) {
         ig_group_type = MockNccl::GroupType::DP_EP;
-      } else{
-        ig_group_type = MockNccl::GroupType::NONE;
       }
+    } else if (ig_alltoallv == WorkloadAllToAllVToken::InvalidVariant) {
+      ig_type = ComType::None;
     } else if (ig_comm_type_s.substr(0,8) == "ALLTOALL") {
       ig_type = ComType::All_to_All;
       if(ig_comm_type_s == "ALLTOALL"){
@@ -1464,17 +1477,20 @@ bool Workload::initialize_workload(std::string name) {
       } else{
         fp_group_type = MockNccl::GroupType::NONE;
       }
-    } else if (fp_comm_type_s.substr(0,9) == "ALLTOALLV") {
+    } else if (IsSupportedWorkloadAllToAllVToken(fp_alltoallv)) {
       fp_type = ComType::All_to_Allv;
-      if(fp_comm_type_s == "ALLTOALLV"){
+      if (fp_alltoallv == WorkloadAllToAllVToken::Default) {
         fp_group_type = MockNccl::GroupType::TP;
-      } else if(fp_comm_type_s == "ALLTOALLV_EP"){
+      } else if (
+          fp_alltoallv == WorkloadAllToAllVToken::ExpertParallel) {
         fp_group_type = MockNccl::GroupType::EP;
-      } else if(fp_comm_type_s == "ALLTOALLV_DP_EP"){
+      } else if (
+          fp_alltoallv ==
+          WorkloadAllToAllVToken::DataAndExpertParallel) {
         fp_group_type = MockNccl::GroupType::DP_EP;
-      } else{
-        fp_group_type = MockNccl::GroupType::NONE;
       }
+    } else if (fp_alltoallv == WorkloadAllToAllVToken::InvalidVariant) {
+      fp_type = ComType::None;
     } else if (fp_comm_type_s.substr(0,8) == "ALLTOALL") {
       fp_type = ComType::All_to_All;
       if(fp_comm_type_s == "ALLTOALL"){

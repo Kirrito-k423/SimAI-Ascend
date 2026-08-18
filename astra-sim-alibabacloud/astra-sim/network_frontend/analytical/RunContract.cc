@@ -4,6 +4,7 @@
  ******************************************************************************/
 
 #include "RunContract.h"
+#include "astra-sim/workload/WorkloadCollectiveDecoder.hh"
 
 #include <algorithm>
 #include <array>
@@ -144,6 +145,38 @@ bool ReadFile(const std::string& path, std::string* content) {
   content->assign(
       std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
   return input.good() || input.eof();
+}
+
+enum class BoundedReadResult {
+  Success,
+  Unreadable,
+  TooLarge,
+};
+
+BoundedReadResult ReadFileWithMaximumBytes(
+    const std::string& path,
+    size_t maximum_bytes,
+    std::string* content) {
+  std::ifstream input(path.c_str(), std::ios::in | std::ios::binary);
+  if (!input) {
+    return BoundedReadResult::Unreadable;
+  }
+  content->clear();
+  std::array<char, 8192> buffer = {{'\0'}};
+  while (input) {
+    const size_t remaining = maximum_bytes - content->size();
+    const size_t requested = std::min(buffer.size(), remaining + 1U);
+    input.read(buffer.data(), static_cast<std::streamsize>(requested));
+    const std::streamsize bytes_read = input.gcount();
+    if (bytes_read > 0) {
+      content->append(buffer.data(), static_cast<size_t>(bytes_read));
+    }
+    if (content->size() > maximum_bytes) {
+      return BoundedReadResult::TooLarge;
+    }
+  }
+  return input.eof() ? BoundedReadResult::Success
+                     : BoundedReadResult::Unreadable;
 }
 
 std::string FileSha256(const std::string& path) {
@@ -882,25 +915,20 @@ bool LoadArtifact(
         policy.reference_remediation);
     return false;
   }
-  if (maximum_bytes > 0U) {
-    std::ifstream size_probe(
-        path.c_str(), std::ios::in | std::ios::binary | std::ios::ate);
-    if (size_probe) {
-      const std::streamoff artifact_bytes = size_probe.tellg();
-      if (artifact_bytes >= 0 &&
-          static_cast<uint64_t>(artifact_bytes) >
-              static_cast<uint64_t>(maximum_bytes)) {
-        Reject(
-            contract,
-            too_large_code,
-            too_large_message,
-            too_large_remediation);
-        return false;
-      }
-    }
-  }
   std::string content;
-  if (!ReadFile(path, &content)) {
+  const BoundedReadResult read_result = maximum_bytes > 0U
+      ? ReadFileWithMaximumBytes(path, maximum_bytes, &content)
+      : (ReadFile(path, &content) ? BoundedReadResult::Success
+                                  : BoundedReadResult::Unreadable);
+  if (read_result == BoundedReadResult::TooLarge) {
+    Reject(
+        contract,
+        too_large_code,
+        too_large_message,
+        too_large_remediation);
+    return false;
+  }
+  if (read_result != BoundedReadResult::Success) {
     Reject(
         contract,
         policy.not_found_code,
@@ -2288,20 +2316,51 @@ std::string Quote(const std::string& value) {
   return "\"" + JsonEscape(value) + "\"";
 }
 
-bool WorkloadRequestsAllToAllV(const std::string& path) {
-  std::string content;
-  if (!ReadFile(path, &content)) {
-    return false;
+enum class LegacyWorkloadCollectiveCheck {
+  NoAllToAllV,
+  HasAllToAllV,
+  InvalidAllToAllVVariant,
+  Malformed,
+};
+
+LegacyWorkloadCollectiveCheck CheckLegacyWorkloadCollectives(
+    const std::string& path) {
+  std::ifstream input(path.c_str());
+  std::string header;
+  std::string layer_count_line;
+  if (!input || !std::getline(input, header) ||
+      !std::getline(input, layer_count_line)) {
+    return LegacyWorkloadCollectiveCheck::Malformed;
   }
-  std::istringstream tokens(content);
-  std::string token;
-  while (tokens >> token) {
-    if (token == "ALLTOALLV" ||
-        token.compare(0U, 10U, "ALLTOALLV_") == 0) {
-      return true;
+  std::istringstream count_input(layer_count_line);
+  int layer_count = 0;
+  std::string count_suffix;
+  if (!(count_input >> layer_count) || layer_count < 0 ||
+      (count_input >> count_suffix)) {
+    return LegacyWorkloadCollectiveCheck::Malformed;
+  }
+
+  bool has_alltoallv = false;
+  for (int layer = 0; layer < layer_count; ++layer) {
+    std::array<std::string, 12> fields;
+    for (std::string& field : fields) {
+      if (!(input >> field)) {
+        return LegacyWorkloadCollectiveCheck::Malformed;
+      }
+    }
+    const std::array<size_t, 3> collective_fields = {{3U, 6U, 9U}};
+    for (const size_t field : collective_fields) {
+      const AstraSim::WorkloadAllToAllVToken decoded =
+          AstraSim::DecodeWorkloadAllToAllVToken(fields[field]);
+      if (decoded == AstraSim::WorkloadAllToAllVToken::InvalidVariant) {
+        return LegacyWorkloadCollectiveCheck::InvalidAllToAllVVariant;
+      }
+      has_alltoallv = has_alltoallv ||
+          AstraSim::IsSupportedWorkloadAllToAllVToken(decoded);
     }
   }
-  return false;
+  return has_alltoallv ? LegacyWorkloadCollectiveCheck::HasAllToAllV
+                       : LegacyWorkloadCollectiveCheck::NoAllToAllV;
 }
 
 }  // namespace
@@ -2523,7 +2582,26 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
   }
   contract.legacy_gpu.nvlink_bandwidth_GBps = nvlink_bandwidth;
   contract.legacy_gpu.nic_bandwidth_GBps = nic_bandwidth;
-  if (WorkloadRequestsAllToAllV(contract.workload_path)) {
+  const LegacyWorkloadCollectiveCheck collective_check =
+      CheckLegacyWorkloadCollectives(contract.workload_path);
+  if (collective_check ==
+      LegacyWorkloadCollectiveCheck::InvalidAllToAllVVariant) {
+    Reject(
+        &contract,
+        "LEGACY_COLLECTIVE_TOKEN_INVALID",
+        "The workload contains an unknown AllToAllV collective token.",
+        "Use ALLTOALLV, ALLTOALLV_EP, or ALLTOALLV_DP_EP exactly.");
+    return contract;
+  }
+  if (collective_check == LegacyWorkloadCollectiveCheck::Malformed) {
+    Reject(
+        &contract,
+        "LEGACY_WORKLOAD_FORMAT_INVALID",
+        "The legacy workload layer records are malformed.",
+        "Provide exactly three communication fields per workload layer.");
+    return contract;
+  }
+  if (collective_check == LegacyWorkloadCollectiveCheck::HasAllToAllV) {
     RejectUnsupported(
         &contract,
         "LEGACY_ALLTOALLV_UNSUPPORTED",
