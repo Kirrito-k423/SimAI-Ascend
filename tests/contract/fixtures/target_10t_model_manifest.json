@@ -1,0 +1,93 @@
+{
+  "apiVersion": "simai.target.model/v1alpha1",
+  "kind": "ModelManifest",
+  "schemaSemver": "0.1.0",
+  "metadata": {
+    "id": "deepseek-v4-pro-target-10t"
+  },
+  "spec": {
+    "source": {
+      "repository": "deepseek-ai/DeepSeek-V4-Pro",
+      "commit": "45040942eb0d1c4e29fa6b92a6195f110e9e7444",
+      "officialHeaderDigest": "sha256:a3a39b9ccb4e729851922fc9c770f5c5755e7b9d7e96cd02c23f0e12b5e25cb9"
+    },
+    "architecture": {
+      "hiddenSize": 7168,
+      "mainMoeLayers": 61,
+      "mtpMoeLayers": 1,
+      "hashRoutedMainLayers": 3,
+      "baselineRoutedExperts": 384,
+      "routedExperts": 2048,
+      "topK": 16,
+      "expertIntermediateSize": 3072,
+      "sharedExperts": 1
+    },
+    "tensorManifest": {
+      "representation": "VERIFIED_TENSOR_GROUPS_V1",
+      "groups": [
+        {
+          "id": "official-baseline-logical-trainable",
+          "instances": 1,
+          "logicalElementsPerInstance": 1598837347742,
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "BASELINE_ALL"
+        },
+        {
+          "id": "added-routed-expert-weights",
+          "instances": 103168,
+          "logicalElementsPerInstance": 66060288,
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_AND_MTP_MOE"
+        },
+        {
+          "id": "added-router-weights",
+          "instances": 103168,
+          "logicalElementsPerInstance": 7168,
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "MAIN_AND_MTP_MOE"
+        },
+        {
+          "id": "added-non-hash-router-biases",
+          "instances": 98176,
+          "logicalElementsPerInstance": 1,
+          "trainableRole": "LOGICAL_TRAINABLE",
+          "blockScope": "NON_HASH_MAIN_AND_MTP_MOE"
+        }
+      ]
+    },
+    "logicalTrainableParameters": 8414884746526,
+    "activeLogicalParameters": {
+      "mainBlocksOnly": 88950053982,
+      "mainForwardIncludingIo": 90803533923,
+      "trainingGraphIncludingMtp": 92345423134,
+      "unit": "count"
+    },
+    "checkpointStorage": {
+      "value": 4486847493752,
+      "unit": "B",
+      "semantics": "FIXED_QUANTIZED_CHECKPOINT_ONLY_NOT_TRAINING_HBM"
+    },
+    "evidenceClass": "USER_INPUT",
+    "readiness": "FIELD_UNVERIFIED",
+    "evidence": [
+      {
+        "id": "fixed-public-model-source",
+        "class": "USER_INPUT",
+        "readiness": "FIELD_UNVERIFIED",
+        "source": {
+          "uri": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro",
+          "ref": "45040942eb0d1c4e29fa6b92a6195f110e9e7444"
+        },
+        "method": {
+          "name": "official-header-grouped-transform",
+          "version": "1"
+        },
+        "asOf": "2026-08-18T00:00:00+08:00",
+        "conditions": {
+          "tensorDataDownloaded": false
+        },
+        "sanitization": "public-metadata-only"
+      }
+    ]
+  }
+}

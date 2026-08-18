@@ -1,0 +1,102 @@
+{
+  "apiVersion": "simai.target.memory/v1alpha1",
+  "kind": "SymbolicMemoryEventPlan",
+  "schemaSemver": "0.1.0",
+  "metadata": {
+    "id": "target-symbolic-training-memory"
+  },
+  "spec": {
+    "modelDigest": "sha256:fe2a04a41c37db98e024f21ae03f5332869c746a96121c54526cf7e5fe4d19ab",
+    "stepDigest": "sha256:b802b140cbade19703be44fa7805dabc01bc6225b3b3a4597cc2864db5c56667",
+    "routingDigest": "sha256:a10a53a08506fad0e2473ef800e4af480262812d8fcb55d61a226c7c86087163",
+    "unit": "B",
+    "aggregation": "CONSERVATIVE_COMPONENT_PEAK_SUM",
+    "bindings": {
+      "precision": "UNBOUND",
+      "optimizer": "UNBOUND",
+      "placement": "UNBOUND",
+      "recomputation": "UNBOUND",
+      "runtime": "UNBOUND"
+    },
+    "components": [
+      {
+        "category": "PARAMETERS",
+        "allocateAt": "JOB_INIT",
+        "releaseAt": "JOB_END",
+        "expression": "logical trainable tensors * training parameter precision / parameter shards",
+        "requires": ["precision", "placement"]
+      },
+      {
+        "category": "GRADIENTS",
+        "allocateAt": "BACKWARD_START_OR_PREALLOC",
+        "releaseAt": "OPTIMIZER_STEP_END",
+        "expression": "logical trainable tensors * gradient precision / gradient shards",
+        "requires": ["precision", "placement"]
+      },
+      {
+        "category": "OPTIMIZER_STATES",
+        "allocateAt": "OPTIMIZER_INIT",
+        "releaseAt": "JOB_END",
+        "expression": "optimizer state tensors and optional master weights / optimizer shards",
+        "requires": ["optimizer", "placement"]
+      },
+      {
+        "category": "ACTIVATIONS",
+        "allocateAt": "FORWARD_TENSOR_PRODUCED",
+        "releaseAt": "BACKWARD_TENSOR_CONSUMED",
+        "expression": "saved activation shape trace after recomputation selection",
+        "requires": ["precision", "placement", "recomputation"]
+      },
+      {
+        "category": "COMMUNICATION_BUFFERS",
+        "allocateAt": "COLLECTIVE_START",
+        "releaseAt": "COLLECTIVE_END",
+        "expression": "dispatch combine collective and runtime scratch buffers",
+        "requires": ["precision", "placement", "runtime"]
+      },
+      {
+        "category": "EXPERT_PLACEMENT",
+        "allocateAt": "EXPERT_DISPATCH_START",
+        "releaseAt": "EXPERT_COMBINE_END",
+        "expression": "local routed expert weights and maximum local expert load",
+        "requires": ["placement", "precision"]
+      },
+      {
+        "category": "RECOMPUTATION",
+        "allocateAt": "BACKWARD_RECOMPUTE_START",
+        "releaseAt": "BACKWARD_RECOMPUTE_END",
+        "expression": "recomputed activation and observed kernel workspace",
+        "requires": ["recomputation", "runtime"]
+      }
+    ],
+    "capacity": {
+      "baseHbmB": "UNKNOWN",
+      "reserveHbmB": "UNKNOWN",
+      "scenarioUsableHbmB": "UNKNOWN",
+      "plannedPeakHbmB": "UNKNOWN",
+      "observedExecutionPeakHbmB": "UNKNOWN"
+    },
+    "evidenceClass": "USER_INPUT",
+    "readiness": "FIELD_UNVERIFIED",
+    "evidence": [
+      {
+        "id": "symbolic-memory-plan-input",
+        "class": "USER_INPUT",
+        "readiness": "FIELD_UNVERIFIED",
+        "source": {
+          "uri": "fixture://issue-19/memory-plan",
+          "ref": "symbolic-v1"
+        },
+        "method": {
+          "name": "symbolic-lifetime-plan",
+          "version": "1"
+        },
+        "asOf": "2026-08-18T00:00:00+08:00",
+        "conditions": {
+          "materializationPoliciesBound": false
+        },
+        "sanitization": "synthetic-no-host-data"
+      }
+    ]
+  }
+}

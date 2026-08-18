@@ -6,6 +6,7 @@
 #ifndef __SIMAI_ANALYTICAL_RUN_CONTRACT_H__
 #define __SIMAI_ANALYTICAL_RUN_CONTRACT_H__
 
+#include <cstdint>
 #include <string>
 
 #include "HcclCostModel.h"
@@ -62,6 +63,66 @@ struct AnalyticalRunContract {
   std::string raw_observation_field_readiness = "UNKNOWN";
   std::string cost_model_evidence_level = "UNKNOWN";
   std::string cost_model_field_readiness = "UNKNOWN";
+  bool target_workload_present = false;
+  bool target_workload_ready = false;
+  std::string target_workload_sha256 = "UNKNOWN";
+  bool target_model_ready = false;
+  std::string target_model_sha256 = "UNKNOWN";
+  std::string target_model_evidence_level = "UNKNOWN";
+  std::string target_model_field_readiness = "UNKNOWN";
+  bool target_step_ready = false;
+  std::string target_step_sha256 = "UNKNOWN";
+  std::string target_step_evidence_level = "UNKNOWN";
+  std::string target_step_field_readiness = "UNKNOWN";
+  uint64_t target_sequence_tokens = 0;
+  uint64_t target_micro_batch_sequences = 0;
+  uint64_t target_data_parallel_replicas = 0;
+  uint64_t target_gradient_accumulation = 0;
+  uint64_t target_configured_gts = 0;
+  uint64_t target_routed_assignment_slots = 0;
+  bool target_routing_ready = false;
+  std::string target_routing_sha256 = "UNKNOWN";
+  std::string target_routing_evidence_level = "UNKNOWN";
+  std::string target_routing_field_readiness = "UNKNOWN";
+  bool target_memory_event_plan_ready = false;
+  std::string target_memory_event_plan_sha256 = "UNKNOWN";
+  std::string target_memory_evidence_level = "UNKNOWN";
+  std::string target_memory_field_readiness = "UNKNOWN";
+  bool target_memory_symbolic = false;
+  bool target_memory_materialized = false;
+  bool target_memory_gate_failed = false;
+  std::string target_precision_policy_sha256 = "UNKNOWN";
+  std::string target_optimizer_policy_sha256 = "UNKNOWN";
+  std::string target_placement_sha256 = "UNKNOWN";
+  std::string target_recomputation_policy_sha256 = "UNKNOWN";
+  std::string target_runtime_profile_sha256 = "UNKNOWN";
+  uint64_t target_memory_parameters_B = 0;
+  uint64_t target_memory_gradients_B = 0;
+  uint64_t target_memory_optimizer_states_B = 0;
+  uint64_t target_memory_activations_B = 0;
+  uint64_t target_memory_communication_buffers_B = 0;
+  uint64_t target_memory_expert_placement_B = 0;
+  uint64_t target_memory_recomputation_B = 0;
+  uint64_t target_memory_peak_B = 0;
+  uint64_t target_memory_base_hbm_B = 0;
+  uint64_t target_memory_reserve_hbm_B = 0;
+  uint64_t target_memory_scenario_usable_hbm_B = 0;
+  uint64_t target_memory_search_limit_B = 0;
+  bool target_memory_execution_peak_known = false;
+  uint64_t target_memory_execution_peak_B = 0;
+  uint64_t target_memory_execution_boundary_B = 0;
+  uint64_t target_memory_execution_maximum_accepted_B = 0;
+  std::string target_memory_search_gate = "UNKNOWN";
+  std::string target_memory_execution_gate = "UNKNOWN";
+  uint64_t target_logical_trainable_parameters = 0;
+  uint64_t target_checkpoint_storage_bytes = 0;
+  uint64_t target_active_main_blocks_parameters = 0;
+  uint64_t target_active_main_forward_parameters = 0;
+  uint64_t target_active_training_graph_parameters = 0;
+  int target_routed_experts = 0;
+  int target_top_k = 0;
+  int target_expert_intermediate_size = 0;
+  int target_shared_experts = 0;
   HcclCostModelConfig hccl_cost_model;
   bool workload_digest_verified = false;
   LegacyGpuRunConfig legacy_gpu;

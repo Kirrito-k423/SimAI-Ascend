@@ -1,0 +1,42 @@
+{
+  "apiVersion": "simai.target.step/v1alpha1",
+  "kind": "OptimizerStepManifest",
+  "schemaSemver": "0.1.0",
+  "metadata": {
+    "id": "target-500m-global-token-step"
+  },
+  "spec": {
+    "modelDigest": "sha256:fe2a04a41c37db98e024f21ae03f5332869c746a96121c54526cf7e5fe4d19ab",
+    "sequenceTokens": 15625,
+    "microBatchSequences": 1,
+    "dataParallelReplicas": 32,
+    "gradientAccumulation": 1000,
+    "configuredGlobalTokens": 500000000,
+    "globalTokenUnit": "count",
+    "formula": "sequenceTokens * microBatchSequences * dataParallelReplicas * gradientAccumulation",
+    "configuredRoutedAssignmentSlotsUpperBound": 496000000000,
+    "routedLayersInScope": 62,
+    "evidenceClass": "USER_INPUT",
+    "readiness": "FIELD_UNVERIFIED",
+    "evidence": [
+      {
+        "id": "fixed-step-input",
+        "class": "USER_INPUT",
+        "readiness": "FIELD_UNVERIFIED",
+        "source": {
+          "uri": "fixture://issue-19/target-step",
+          "ref": "gts-500m-v1"
+        },
+        "method": {
+          "name": "optimizer-step-contract",
+          "version": "1"
+        },
+        "asOf": "2026-08-18T00:00:00+08:00",
+        "conditions": {
+          "runtimeExecuted": false
+        },
+        "sanitization": "synthetic-no-host-data"
+      }
+    ]
+  }
+}

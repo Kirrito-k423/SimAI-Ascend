@@ -1,0 +1,41 @@
+{
+  "apiVersion": "simai.target.routing/v1alpha1",
+  "kind": "TargetRoutingArtifact",
+  "schemaSemver": "0.1.0",
+  "metadata": {
+    "id": "target-hash-then-topk-routing"
+  },
+  "spec": {
+    "modelDigest": "sha256:fe2a04a41c37db98e024f21ae03f5332869c746a96121c54526cf7e5fe4d19ab",
+    "stepDigest": "sha256:b802b140cbade19703be44fa7805dabc01bc6225b3b3a4597cc2864db5c56667",
+    "policy": {
+      "mode": "HASH_FIRST_THREE_THEN_TOPK",
+      "routedExperts": 2048,
+      "topK": 16,
+      "hashRoutedMainLayers": 3,
+      "counts": "SYMBOLIC_UNMATERIALIZED"
+    },
+    "evidenceClass": "USER_INPUT",
+    "readiness": "FIELD_UNVERIFIED",
+    "evidence": [
+      {
+        "id": "routing-policy-input",
+        "class": "USER_INPUT",
+        "readiness": "FIELD_UNVERIFIED",
+        "source": {
+          "uri": "fixture://issue-19/routing-policy",
+          "ref": "hash-then-topk-v1"
+        },
+        "method": {
+          "name": "symbolic-routing-policy",
+          "version": "1"
+        },
+        "asOf": "2026-08-18T00:00:00+08:00",
+        "conditions": {
+          "observedCountsAvailable": false
+        },
+        "sanitization": "synthetic-no-host-data"
+      }
+    ]
+  }
+}

@@ -574,6 +574,21 @@ bool PositiveUint64Member(
   return true;
 }
 
+bool NonNegativeUint64Member(
+    const JsonValue& object,
+    const std::string& key,
+    uint64_t* value) {
+  double number = 0.0;
+  const double maximum_exact_json_integer = 9007199254740991.0;
+  if (!NumberMember(object, key, &number) || number < 0.0 ||
+      number > maximum_exact_json_integer ||
+      std::floor(number) != number) {
+    return false;
+  }
+  *value = static_cast<uint64_t>(number);
+  return true;
+}
+
 const JsonValue* FirstArrayObject(
     const JsonValue& object,
     const std::string& key) {
@@ -951,6 +966,1097 @@ bool LoadArtifact(
         policy.json_code,
         policy.json_message,
         policy.json_remediation);
+    return false;
+  }
+  return true;
+}
+
+struct ValidatedTargetModel {
+  uint64_t logical_trainable_parameters = 0;
+  uint64_t checkpoint_storage_bytes = 0;
+  uint64_t active_main_blocks_parameters = 0;
+  uint64_t active_main_forward_parameters = 0;
+  uint64_t active_training_graph_parameters = 0;
+  int routed_experts = 0;
+  int top_k = 0;
+  int expert_intermediate_size = 0;
+  int shared_experts = 0;
+  std::string evidence_level;
+  std::string field_readiness;
+};
+
+bool ValidateTargetResourceEvidence(
+    const JsonValue& spec,
+    std::string* evidence_level,
+    std::string* field_readiness) {
+  std::map<std::string, std::string> evidence_classes;
+  if (!StringMember(spec, "evidenceClass", evidence_level) ||
+      !StringMember(spec, "readiness", field_readiness) ||
+      (*field_readiness != "FIELD_UNVERIFIED" &&
+       *field_readiness != "FIELD_VERIFIED") ||
+      !BuildEvidenceClassIndex(spec, &evidence_classes)) {
+    return false;
+  }
+  bool matching_class = false;
+  for (const auto& evidence : evidence_classes) {
+    matching_class = matching_class || evidence.second == *evidence_level;
+  }
+  return matching_class &&
+      !(*field_readiness == "FIELD_UNVERIFIED" &&
+        *evidence_level == "MEASURED");
+}
+
+bool SafeMultiplyAdd(
+    uint64_t left,
+    uint64_t right,
+    uint64_t* total) {
+  if (left != 0U && right > std::numeric_limits<uint64_t>::max() / left) {
+    return false;
+  }
+  const uint64_t product = left * right;
+  if (product > std::numeric_limits<uint64_t>::max() - *total) {
+    return false;
+  }
+  *total += product;
+  return true;
+}
+
+bool SafeMultiply(uint64_t left, uint64_t right, uint64_t* product) {
+  if (left != 0U && right > std::numeric_limits<uint64_t>::max() / left) {
+    return false;
+  }
+  *product = left * right;
+  return true;
+}
+
+bool ValidateTargetModel(
+    const JsonValue& model,
+    AnalyticalRunContract* contract,
+    ValidatedTargetModel* validated) {
+  std::string api_version;
+  std::string kind;
+  std::string schema_semver;
+  std::string source_repository;
+  std::string source_commit;
+  std::string source_header_digest;
+  std::string tensor_representation;
+  std::string active_unit;
+  std::string checkpoint_unit;
+  std::string checkpoint_semantics;
+  int hidden_size = 0;
+  int main_moe_layers = 0;
+  int mtp_moe_layers = 0;
+  int hash_routed_main_layers = 0;
+  int baseline_routed_experts = 0;
+  uint64_t declared_logical_parameters = 0;
+  const JsonValue* metadata = Member(model, "metadata");
+  const JsonValue* spec = Member(model, "spec");
+  const JsonValue* source = spec == nullptr ? nullptr : Member(*spec, "source");
+  const JsonValue* architecture =
+      spec == nullptr ? nullptr : Member(*spec, "architecture");
+  const JsonValue* tensor_manifest =
+      spec == nullptr ? nullptr : Member(*spec, "tensorManifest");
+  const JsonValue* groups =
+      tensor_manifest == nullptr ? nullptr : Member(*tensor_manifest, "groups");
+  const JsonValue* active =
+      spec == nullptr ? nullptr : Member(*spec, "activeLogicalParameters");
+  const JsonValue* checkpoint =
+      spec == nullptr ? nullptr : Member(*spec, "checkpointStorage");
+  if (!StringMember(model, "apiVersion", &api_version) ||
+      api_version != "simai.target.model/v1alpha1" ||
+      !StringMember(model, "kind", &kind) || kind != "ModelManifest" ||
+      !StringMember(model, "schemaSemver", &schema_semver) ||
+      schema_semver != "0.1.0" || metadata == nullptr ||
+      spec == nullptr || source == nullptr || architecture == nullptr ||
+      tensor_manifest == nullptr || groups == nullptr || active == nullptr ||
+      checkpoint == nullptr || groups->type != JsonValue::Type::Array ||
+      !StringMember(*source, "repository", &source_repository) ||
+      source_repository != "deepseek-ai/DeepSeek-V4-Pro" ||
+      !StringMember(*source, "commit", &source_commit) ||
+      source_commit != "45040942eb0d1c4e29fa6b92a6195f110e9e7444" ||
+      !StringMember(*source, "officialHeaderDigest", &source_header_digest) ||
+      source_header_digest !=
+          "sha256:a3a39b9ccb4e729851922fc9c770f5c5755e7b9d7e96cd02c23f0e12b5e25cb9" ||
+      !PositiveIntMember(*architecture, "hiddenSize", &hidden_size) ||
+      !PositiveIntMember(*architecture, "mainMoeLayers", &main_moe_layers) ||
+      !PositiveIntMember(*architecture, "mtpMoeLayers", &mtp_moe_layers) ||
+      !PositiveIntMember(
+          *architecture, "hashRoutedMainLayers", &hash_routed_main_layers) ||
+      !PositiveIntMember(
+          *architecture,
+          "baselineRoutedExperts",
+          &baseline_routed_experts) ||
+      !PositiveIntMember(
+          *architecture, "routedExperts", &validated->routed_experts) ||
+      !PositiveIntMember(*architecture, "topK", &validated->top_k) ||
+      !PositiveIntMember(
+          *architecture,
+          "expertIntermediateSize",
+          &validated->expert_intermediate_size) ||
+      !PositiveIntMember(
+          *architecture, "sharedExperts", &validated->shared_experts) ||
+      !StringMember(
+          *tensor_manifest, "representation", &tensor_representation) ||
+      tensor_representation != "VERIFIED_TENSOR_GROUPS_V1" ||
+      !PositiveUint64Member(
+          *spec,
+          "logicalTrainableParameters",
+          &declared_logical_parameters) ||
+      !PositiveUint64Member(
+          *active,
+          "mainBlocksOnly",
+          &validated->active_main_blocks_parameters) ||
+      !PositiveUint64Member(
+          *active,
+          "mainForwardIncludingIo",
+          &validated->active_main_forward_parameters) ||
+      !PositiveUint64Member(
+          *active,
+          "trainingGraphIncludingMtp",
+          &validated->active_training_graph_parameters) ||
+      !StringMember(*active, "unit", &active_unit) || active_unit != "count" ||
+      !PositiveUint64Member(
+          *checkpoint, "value", &validated->checkpoint_storage_bytes) ||
+      !StringMember(*checkpoint, "unit", &checkpoint_unit) ||
+      checkpoint_unit != "B" ||
+      !StringMember(*checkpoint, "semantics", &checkpoint_semantics) ||
+      checkpoint_semantics !=
+          "FIXED_QUANTIZED_CHECKPOINT_ONLY_NOT_TRAINING_HBM" ||
+      !ValidateTargetResourceEvidence(
+          *spec,
+          &validated->evidence_level,
+          &validated->field_readiness)) {
+    Reject(
+        contract,
+        "TARGET_MODEL_SCHEMA_INVALID",
+        "The Target Model Manifest schema or evidence is invalid.",
+        "Provide the frozen public v1alpha1 Target Model Manifest.");
+    return false;
+  }
+
+  struct ExpectedGroup {
+    uint64_t instances;
+    uint64_t elements;
+    const char* scope;
+  };
+  const std::map<std::string, ExpectedGroup> expected_groups = {
+      {"official-baseline-logical-trainable",
+       {1U, 1598837347742ULL, "BASELINE_ALL"}},
+      {"added-routed-expert-weights",
+       {103168U, 66060288U, "MAIN_AND_MTP_MOE"}},
+      {"added-router-weights", {103168U, 7168U, "MAIN_AND_MTP_MOE"}},
+      {"added-non-hash-router-biases",
+       {98176U, 1U, "NON_HASH_MAIN_AND_MTP_MOE"}}};
+  std::map<std::string, bool> observed_groups;
+  uint64_t computed_logical_parameters = 0U;
+  bool groups_valid = groups->array.size() == expected_groups.size();
+  for (const JsonValue& group : groups->array) {
+    std::string id;
+    std::string role;
+    std::string scope;
+    uint64_t instances = 0U;
+    uint64_t elements = 0U;
+    if (!StringMember(group, "id", &id) ||
+        !StringMember(group, "trainableRole", &role) ||
+        role != "LOGICAL_TRAINABLE" ||
+        !StringMember(group, "blockScope", &scope) ||
+        !PositiveUint64Member(group, "instances", &instances) ||
+        !PositiveUint64Member(
+            group, "logicalElementsPerInstance", &elements) ||
+        expected_groups.count(id) != 1U || observed_groups.count(id) != 0U) {
+      groups_valid = false;
+      break;
+    }
+    const ExpectedGroup& expected = expected_groups.at(id);
+    if (instances != expected.instances || elements != expected.elements ||
+        scope != expected.scope ||
+        !SafeMultiplyAdd(instances, elements, &computed_logical_parameters)) {
+      groups_valid = false;
+      break;
+    }
+    observed_groups[id] = true;
+  }
+  if (!groups_valid || observed_groups.size() != expected_groups.size() ||
+      hidden_size != 7168 || main_moe_layers != 61 ||
+      mtp_moe_layers != 1 || hash_routed_main_layers != 3 ||
+      baseline_routed_experts != 384 || validated->routed_experts != 2048 ||
+      validated->top_k != 16 ||
+      validated->expert_intermediate_size != 3072 ||
+      validated->shared_experts != 1 ||
+      computed_logical_parameters != 8414884746526ULL ||
+      declared_logical_parameters != computed_logical_parameters ||
+      validated->active_main_blocks_parameters != 88950053982ULL ||
+      validated->active_main_forward_parameters != 90803533923ULL ||
+      validated->active_training_graph_parameters != 92345423134ULL ||
+      validated->checkpoint_storage_bytes != 4486847493752ULL) {
+    Reject(
+        contract,
+        "TARGET_MODEL_IDENTITY_MISMATCH",
+        "The Target Model differs from the frozen 10T-scale identity.",
+        "Use 2048 routed experts, TopK 16, width 3072, and one shared expert.");
+    return false;
+  }
+  validated->logical_trainable_parameters = computed_logical_parameters;
+  return true;
+}
+
+bool LoadTargetModel(
+    const JsonValue& target_workload,
+    AnalyticalRunContract* contract) {
+  const JsonValue* model_reference = Member(target_workload, "model");
+  if (model_reference == nullptr) {
+    RejectUnsupported(
+        contract,
+        "TARGET_MODEL_REQUIRED",
+        "The Target Workload has no Model Manifest.",
+        "Provide target_workload.model with an immutable SHA-256 reference.");
+    return false;
+  }
+  const ArtifactLoadPolicy model_policy = {
+      "TARGET_MODEL_REFERENCE_INVALID",
+      "The Target Model reference is invalid.",
+      "Provide target_workload.model.path and its SHA-256 digest.",
+      "TARGET_MODEL_NOT_FOUND",
+      "The Target Model Manifest could not be read.",
+      "Provide a readable public Target Model Manifest.",
+      "TARGET_MODEL_DIGEST_MISMATCH",
+      "The Target Model does not match its declared digest.",
+      "Use the intended immutable Model Manifest or update its digest.",
+      "TARGET_MODEL_INVALID_JSON",
+      "The Target Model Manifest is not valid JSON.",
+      "Correct the Model Manifest JSON and retry."};
+  LoadedArtifact model_artifact;
+  if (!LoadArtifact(
+          *model_reference, model_policy, contract, &model_artifact)) {
+    return false;
+  }
+  contract->target_model_sha256 = model_artifact.sha256;
+  ValidatedTargetModel model;
+  if (!ValidateTargetModel(model_artifact.document, contract, &model)) {
+    return false;
+  }
+  contract->target_model_ready = true;
+  contract->target_logical_trainable_parameters =
+      model.logical_trainable_parameters;
+  contract->target_checkpoint_storage_bytes = model.checkpoint_storage_bytes;
+  contract->target_active_main_blocks_parameters =
+      model.active_main_blocks_parameters;
+  contract->target_active_main_forward_parameters =
+      model.active_main_forward_parameters;
+  contract->target_active_training_graph_parameters =
+      model.active_training_graph_parameters;
+  contract->target_routed_experts = model.routed_experts;
+  contract->target_top_k = model.top_k;
+  contract->target_expert_intermediate_size = model.expert_intermediate_size;
+  contract->target_shared_experts = model.shared_experts;
+  contract->target_model_evidence_level = model.evidence_level;
+  contract->target_model_field_readiness = model.field_readiness;
+  return true;
+}
+
+struct ValidatedTargetStep {
+  uint64_t sequence_tokens = 0;
+  uint64_t micro_batch_sequences = 0;
+  uint64_t data_parallel_replicas = 0;
+  uint64_t gradient_accumulation = 0;
+  uint64_t configured_gts = 0;
+  uint64_t routed_assignment_slots = 0;
+  std::string evidence_level;
+  std::string field_readiness;
+};
+
+bool ValidateTargetStep(
+    const JsonValue& step,
+    const std::string& model_digest,
+    AnalyticalRunContract* contract,
+    ValidatedTargetStep* validated) {
+  std::string api_version;
+  std::string kind;
+  std::string schema_semver;
+  std::string referenced_model_digest;
+  std::string unit;
+  std::string formula;
+  const JsonValue* spec = Member(step, "spec");
+  if (!StringMember(step, "apiVersion", &api_version) ||
+      api_version != "simai.target.step/v1alpha1" ||
+      !StringMember(step, "kind", &kind) ||
+      kind != "OptimizerStepManifest" ||
+      !StringMember(step, "schemaSemver", &schema_semver) ||
+      schema_semver != "0.1.0" || spec == nullptr ||
+      !StringMember(*spec, "modelDigest", &referenced_model_digest) ||
+      !StringMember(*spec, "globalTokenUnit", &unit) || unit != "count" ||
+      !StringMember(*spec, "formula", &formula) ||
+      formula !=
+          "sequenceTokens * microBatchSequences * dataParallelReplicas * gradientAccumulation" ||
+      !ValidateTargetResourceEvidence(
+          *spec,
+          &validated->evidence_level,
+          &validated->field_readiness)) {
+    Reject(
+        contract,
+        "TARGET_STEP_SCHEMA_INVALID",
+        "The Target Step Manifest schema or evidence is invalid.",
+        "Provide the v1alpha1 optimizer-step GTS contract.");
+    return false;
+  }
+  if (referenced_model_digest != model_digest) {
+    Reject(
+        contract,
+        "TARGET_STEP_MODEL_DIGEST_MISMATCH",
+        "The Target Step references a different Model Manifest.",
+        "Bind the Step and Target Workload to the same model digest.");
+    return false;
+  }
+  if (!PositiveUint64Member(
+          *spec, "sequenceTokens", &validated->sequence_tokens) ||
+      !PositiveUint64Member(
+          *spec,
+          "microBatchSequences",
+          &validated->micro_batch_sequences) ||
+      !PositiveUint64Member(
+          *spec,
+          "dataParallelReplicas",
+          &validated->data_parallel_replicas) ||
+      !PositiveUint64Member(
+          *spec,
+          "gradientAccumulation",
+          &validated->gradient_accumulation)) {
+    Reject(
+        contract,
+        "TARGET_STEP_FACTOR_INVALID",
+        "A GTS factor is zero, negative, non-integer, or unsafe.",
+        "Use positive JSON-safe integers for sequence, MBS, DP, and GA.");
+    return false;
+  }
+  uint64_t sequence_micro_batch = 0U;
+  uint64_t sequence_micro_batch_dp = 0U;
+  if (!SafeMultiply(
+          validated->sequence_tokens,
+          validated->micro_batch_sequences,
+          &sequence_micro_batch) ||
+      !SafeMultiply(
+          sequence_micro_batch,
+          validated->data_parallel_replicas,
+          &sequence_micro_batch_dp) ||
+      !SafeMultiply(
+          sequence_micro_batch_dp,
+          validated->gradient_accumulation,
+          &validated->configured_gts)) {
+    Reject(
+        contract,
+        "TARGET_STEP_GTS_OVERFLOW",
+        "The configured GTS multiplication overflows uint64.",
+        "Reduce sequence, MBS, DP, or GA before retrying.");
+    return false;
+  }
+  uint64_t declared_gts = 0U;
+  if (!PositiveUint64Member(*spec, "configuredGlobalTokens", &declared_gts) ||
+      declared_gts != validated->configured_gts) {
+    Reject(
+        contract,
+        "TARGET_STEP_GTS_MISMATCH",
+        "The declared GTS differs from sequence times MBS times DP times GA.",
+        "Recompute configuredGlobalTokens from the four canonical factors.");
+    return false;
+  }
+  if (validated->configured_gts > 500000000U) {
+    Reject(
+        contract,
+        "TARGET_STEP_GTS_LIMIT_EXCEEDED",
+        "The configured GTS exceeds 500,000,000 tokens per optimizer step.",
+        "Use a sequence, MBS, DP, and GA product no greater than 500M.");
+    return false;
+  }
+  uint64_t routed_layers = 0U;
+  uint64_t declared_assignment_slots = 0U;
+  uint64_t gts_times_top_k = 0U;
+  if (!PositiveUint64Member(*spec, "routedLayersInScope", &routed_layers) ||
+      routed_layers != 62U ||
+      !PositiveUint64Member(
+          *spec,
+          "configuredRoutedAssignmentSlotsUpperBound",
+          &declared_assignment_slots) ||
+      !SafeMultiply(validated->configured_gts, 16U, &gts_times_top_k) ||
+      !SafeMultiply(
+          gts_times_top_k,
+          routed_layers,
+          &validated->routed_assignment_slots) ||
+      declared_assignment_slots != validated->routed_assignment_slots) {
+    Reject(
+        contract,
+        "TARGET_STEP_ASSIGNMENT_MISMATCH",
+        "The routed assignment-slot upper bound is inconsistent.",
+        "Use configured GTS times TopK 16 times 62 routed layers.");
+    return false;
+  }
+  return true;
+}
+
+bool LoadTargetStep(
+    const JsonValue& target_workload,
+    AnalyticalRunContract* contract) {
+  const JsonValue* step_reference = Member(target_workload, "step");
+  if (step_reference == nullptr) {
+    RejectUnsupported(
+        contract,
+        "TARGET_STEP_REQUIRED",
+        "The Target Workload has no Step/GTS Manifest.",
+        "Provide target_workload.step with an immutable SHA-256 reference.");
+    return false;
+  }
+  const ArtifactLoadPolicy step_policy = {
+      "TARGET_STEP_REFERENCE_INVALID",
+      "The Target Step reference is invalid.",
+      "Provide target_workload.step.path and its SHA-256 digest.",
+      "TARGET_STEP_NOT_FOUND",
+      "The Target Step Manifest could not be read.",
+      "Provide a readable public Step/GTS Manifest.",
+      "TARGET_STEP_DIGEST_MISMATCH",
+      "The Target Step does not match its declared digest.",
+      "Use the intended immutable Step Manifest or update its digest.",
+      "TARGET_STEP_INVALID_JSON",
+      "The Target Step Manifest is not valid JSON.",
+      "Correct the Step Manifest JSON and retry."};
+  LoadedArtifact step_artifact;
+  if (!LoadArtifact(
+          *step_reference, step_policy, contract, &step_artifact)) {
+    return false;
+  }
+  contract->target_step_sha256 = step_artifact.sha256;
+  ValidatedTargetStep step;
+  if (!ValidateTargetStep(
+          step_artifact.document,
+          contract->target_model_sha256,
+          contract,
+          &step)) {
+    return false;
+  }
+  contract->target_step_ready = true;
+  contract->target_sequence_tokens = step.sequence_tokens;
+  contract->target_micro_batch_sequences = step.micro_batch_sequences;
+  contract->target_data_parallel_replicas = step.data_parallel_replicas;
+  contract->target_gradient_accumulation = step.gradient_accumulation;
+  contract->target_configured_gts = step.configured_gts;
+  contract->target_routed_assignment_slots = step.routed_assignment_slots;
+  contract->target_step_evidence_level = step.evidence_level;
+  contract->target_step_field_readiness = step.field_readiness;
+  return true;
+}
+
+struct ValidatedTargetRouting {
+  std::string evidence_level;
+  std::string field_readiness;
+};
+
+bool ValidateTargetRouting(
+    const JsonValue& routing,
+    const AnalyticalRunContract& loaded_contract,
+    AnalyticalRunContract* contract,
+    ValidatedTargetRouting* validated) {
+  std::string api_version;
+  std::string kind;
+  std::string schema_semver;
+  std::string model_digest;
+  std::string step_digest;
+  std::string mode;
+  std::string counts;
+  int routed_experts = 0;
+  int top_k = 0;
+  int hash_layers = 0;
+  const JsonValue* spec = Member(routing, "spec");
+  const JsonValue* policy = spec == nullptr ? nullptr : Member(*spec, "policy");
+  if (!StringMember(routing, "apiVersion", &api_version) ||
+      api_version != "simai.target.routing/v1alpha1" ||
+      !StringMember(routing, "kind", &kind) ||
+      kind != "TargetRoutingArtifact" ||
+      !StringMember(routing, "schemaSemver", &schema_semver) ||
+      schema_semver != "0.1.0" || spec == nullptr || policy == nullptr ||
+      !StringMember(*spec, "modelDigest", &model_digest) ||
+      !StringMember(*spec, "stepDigest", &step_digest) ||
+      !StringMember(*policy, "mode", &mode) ||
+      mode != "HASH_FIRST_THREE_THEN_TOPK" ||
+      !PositiveIntMember(*policy, "routedExperts", &routed_experts) ||
+      !PositiveIntMember(*policy, "topK", &top_k) ||
+      !PositiveIntMember(*policy, "hashRoutedMainLayers", &hash_layers) ||
+      !StringMember(*policy, "counts", &counts) ||
+      counts != "SYMBOLIC_UNMATERIALIZED" ||
+      !ValidateTargetResourceEvidence(
+          *spec,
+          &validated->evidence_level,
+          &validated->field_readiness)) {
+    Reject(
+        contract,
+        "TARGET_ROUTING_SCHEMA_INVALID",
+        "The Target Routing Artifact schema or evidence is invalid.",
+        "Provide the v1alpha1 external hash-then-TopK routing artifact.");
+    return false;
+  }
+  if (Member(*spec, "projectedA2ATraffic") != nullptr ||
+      Member(*spec, "domainPairBytes") != nullptr ||
+      Member(*spec, "topologyResourceLoads") != nullptr ||
+      Member(*policy, "projectedA2ATraffic") != nullptr ||
+      Member(*policy, "domainPairBytes") != nullptr ||
+      Member(*policy, "topologyResourceLoads") != nullptr) {
+    Reject(
+        contract,
+        "TARGET_ROUTING_PROJECTED_A2A_FORBIDDEN",
+        "Projected A2A traffic is outside the Target Routing Artifact.",
+        "Keep routing policy external; derive Projected A2A in its own ticket.");
+    return false;
+  }
+  if (model_digest != loaded_contract.target_model_sha256) {
+    Reject(
+        contract,
+        "TARGET_ROUTING_MODEL_DIGEST_MISMATCH",
+        "The Target Routing Artifact references a different model.",
+        "Bind routing.modelDigest to the selected Model Manifest.");
+    return false;
+  }
+  if (step_digest != loaded_contract.target_step_sha256) {
+    Reject(
+        contract,
+        "TARGET_ROUTING_STEP_DIGEST_MISMATCH",
+        "The Target Routing Artifact references a different step.",
+        "Bind routing.stepDigest to the selected Step Manifest.");
+    return false;
+  }
+  if (routed_experts != 2048 || top_k != 16 || hash_layers != 3) {
+    Reject(
+        contract,
+        "TARGET_ROUTING_MODEL_IDENTITY_MISMATCH",
+        "Routing policy differs from the frozen Target Model identity.",
+        "Use 2048 routed experts, TopK 16, and three hash-routed layers.");
+    return false;
+  }
+  return true;
+}
+
+bool LoadTargetRouting(
+    const JsonValue& target_workload,
+    AnalyticalRunContract* contract) {
+  const JsonValue* routing_reference = Member(target_workload, "routing");
+  if (routing_reference == nullptr) {
+    RejectUnsupported(
+        contract,
+        "TARGET_ROUTING_REQUIRED",
+        "The Target Workload has no external Routing Artifact.",
+        "Provide target_workload.routing with an immutable SHA-256 reference.");
+    return false;
+  }
+  const ArtifactLoadPolicy routing_policy = {
+      "TARGET_ROUTING_REFERENCE_INVALID",
+      "The Target Routing reference is invalid.",
+      "Provide target_workload.routing.path and its SHA-256 digest.",
+      "TARGET_ROUTING_NOT_FOUND",
+      "The Target Routing Artifact could not be read.",
+      "Provide a readable public Target Routing Artifact.",
+      "TARGET_ROUTING_DIGEST_MISMATCH",
+      "The Target Routing Artifact does not match its declared digest.",
+      "Use the intended immutable Routing Artifact or update its digest.",
+      "TARGET_ROUTING_INVALID_JSON",
+      "The Target Routing Artifact is not valid JSON.",
+      "Correct the Routing Artifact JSON and retry."};
+  LoadedArtifact routing_artifact;
+  if (!LoadArtifact(
+          *routing_reference, routing_policy, contract, &routing_artifact)) {
+    return false;
+  }
+  contract->target_routing_sha256 = routing_artifact.sha256;
+  ValidatedTargetRouting routing;
+  if (!ValidateTargetRouting(
+          routing_artifact.document, *contract, contract, &routing)) {
+    return false;
+  }
+  contract->target_routing_ready = true;
+  contract->target_routing_evidence_level = routing.evidence_level;
+  contract->target_routing_field_readiness = routing.field_readiness;
+  return true;
+}
+
+struct ValidatedTargetMemoryPlan {
+  std::string evidence_level;
+  std::string field_readiness;
+  bool symbolic = false;
+  bool materialized = false;
+  std::map<std::string, std::string> binding_digests;
+  std::map<std::string, uint64_t> component_bytes;
+  uint64_t peak_bytes = 0;
+  uint64_t base_hbm_bytes = 0;
+  uint64_t reserve_hbm_bytes = 0;
+  uint64_t usable_hbm_bytes = 0;
+  uint64_t search_limit_bytes = 0;
+  bool execution_peak_known = false;
+  uint64_t execution_peak_bytes = 0;
+  uint64_t execution_boundary_bytes = 0;
+  uint64_t execution_maximum_accepted_bytes = 0;
+  std::string search_gate = "UNKNOWN";
+  std::string execution_gate = "UNKNOWN";
+};
+
+uint64_t FloorPercent(uint64_t value, uint64_t percent) {
+  return (value / 100U) * percent + ((value % 100U) * percent) / 100U;
+}
+
+bool ValidateTargetMemoryPlan(
+    const JsonValue& memory,
+    const AnalyticalRunContract& loaded_contract,
+    AnalyticalRunContract* contract,
+    ValidatedTargetMemoryPlan* validated) {
+  std::string api_version;
+  std::string kind;
+  std::string schema_semver;
+  std::string model_digest;
+  std::string step_digest;
+  std::string routing_digest;
+  std::string unit;
+  std::string aggregation;
+  const JsonValue* spec = Member(memory, "spec");
+  const JsonValue* bindings =
+      spec == nullptr ? nullptr : Member(*spec, "bindings");
+  const JsonValue* components =
+      spec == nullptr ? nullptr : Member(*spec, "components");
+  const JsonValue* capacity =
+      spec == nullptr ? nullptr : Member(*spec, "capacity");
+  if (!StringMember(memory, "apiVersion", &api_version) ||
+      api_version != "simai.target.memory/v1alpha1" ||
+      !StringMember(memory, "kind", &kind) ||
+      kind != "SymbolicMemoryEventPlan" ||
+      !StringMember(memory, "schemaSemver", &schema_semver) ||
+      schema_semver != "0.1.0" || spec == nullptr || bindings == nullptr ||
+      bindings->type != JsonValue::Type::Object || components == nullptr ||
+      components->type != JsonValue::Type::Array || capacity == nullptr ||
+      capacity->type != JsonValue::Type::Object ||
+      !StringMember(*spec, "modelDigest", &model_digest) ||
+      !StringMember(*spec, "stepDigest", &step_digest) ||
+      !StringMember(*spec, "routingDigest", &routing_digest) ||
+      !StringMember(*spec, "unit", &unit) || unit != "B" ||
+      !StringMember(*spec, "aggregation", &aggregation) ||
+      aggregation != "CONSERVATIVE_COMPONENT_PEAK_SUM" ||
+      !ValidateTargetResourceEvidence(
+          *spec,
+          &validated->evidence_level,
+          &validated->field_readiness)) {
+    Reject(
+        contract,
+        "TARGET_MEMORY_SCHEMA_INVALID",
+        "The Memory Event Plan schema or evidence is invalid.",
+        "Provide the v1alpha1 symbolic lifetime plan in bytes.");
+    return false;
+  }
+  if (model_digest != loaded_contract.target_model_sha256 ||
+      step_digest != loaded_contract.target_step_sha256 ||
+      routing_digest != loaded_contract.target_routing_sha256) {
+    Reject(
+        contract,
+        "TARGET_MEMORY_RESOURCE_DIGEST_MISMATCH",
+        "The Memory Event Plan references a different Target resource.",
+        "Bind memory model/step/routing digests to this Target Workload.");
+    return false;
+  }
+  const std::vector<std::string> binding_names = {
+      "precision", "optimizer", "placement", "recomputation", "runtime"};
+  size_t unbound_bindings = 0U;
+  size_t bound_bindings = 0U;
+  for (const std::string& binding_name : binding_names) {
+    std::string binding_state;
+    if (StringMember(*bindings, binding_name, &binding_state) &&
+        binding_state == "UNBOUND") {
+      ++unbound_bindings;
+      continue;
+    }
+    const JsonValue* binding = Member(*bindings, binding_name);
+    std::string digest;
+    if (binding == nullptr || binding->type != JsonValue::Type::Object ||
+        !StringMember(*binding, "state", &binding_state) ||
+        binding_state != "BOUND" ||
+        !StringMember(*binding, "sha256", &digest) ||
+        !IsSha256Identifier(digest)) {
+      Reject(
+          contract,
+          "TARGET_MEMORY_BINDING_INVALID",
+          "The Memory Event Plan has an invalid materialization binding.",
+          "Use all UNBOUND values or content-address every BOUND policy.");
+      return false;
+    }
+    ++bound_bindings;
+    validated->binding_digests[binding_name] = digest;
+  }
+  if (unbound_bindings != 0U && bound_bindings != 0U) {
+    Reject(
+        contract,
+        "TARGET_MEMORY_BINDINGS_INCOMPLETE",
+        "Memory materialization bindings are only partially bound.",
+        "Bind all precision/optimizer/placement/recompute/runtime policies or none.");
+    return false;
+  }
+  validated->symbolic = unbound_bindings == binding_names.size();
+  validated->materialized = bound_bindings == binding_names.size();
+  struct ExpectedMemoryComponent {
+    const char* allocate_at;
+    const char* release_at;
+    const char* expression;
+    std::vector<std::string> requirements;
+  };
+  const std::map<std::string, ExpectedMemoryComponent> expected_components = {
+      {"PARAMETERS",
+       {"JOB_INIT",
+        "JOB_END",
+        "logical trainable tensors * training parameter precision / parameter shards",
+        {"precision", "placement"}}},
+      {"GRADIENTS",
+       {"BACKWARD_START_OR_PREALLOC",
+        "OPTIMIZER_STEP_END",
+        "logical trainable tensors * gradient precision / gradient shards",
+        {"precision", "placement"}}},
+      {"OPTIMIZER_STATES",
+       {"OPTIMIZER_INIT",
+        "JOB_END",
+        "optimizer state tensors and optional master weights / optimizer shards",
+        {"optimizer", "placement"}}},
+      {"ACTIVATIONS",
+       {"FORWARD_TENSOR_PRODUCED",
+        "BACKWARD_TENSOR_CONSUMED",
+        "saved activation shape trace after recomputation selection",
+        {"precision", "placement", "recomputation"}}},
+      {"COMMUNICATION_BUFFERS",
+       {"COLLECTIVE_START",
+        "COLLECTIVE_END",
+        "dispatch combine collective and runtime scratch buffers",
+        {"precision", "placement", "runtime"}}},
+      {"EXPERT_PLACEMENT",
+       {"EXPERT_DISPATCH_START",
+        "EXPERT_COMBINE_END",
+        "local routed expert weights and maximum local expert load",
+        {"placement", "precision"}}},
+      {"RECOMPUTATION",
+       {"BACKWARD_RECOMPUTE_START",
+        "BACKWARD_RECOMPUTE_END",
+        "recomputed activation and observed kernel workspace",
+        {"recomputation", "runtime"}}}};
+  std::map<std::string, bool> observed_categories;
+  bool components_valid = components->array.size() == expected_components.size();
+  for (const JsonValue& component : components->array) {
+    std::string category;
+    std::string allocate_at;
+    std::string release_at;
+    std::string expression;
+    const JsonValue* requirements = Member(component, "requires");
+    if (!StringMember(component, "category", &category) ||
+        expected_components.count(category) != 1U ||
+        observed_categories.count(category) != 0U ||
+        !StringMember(component, "allocateAt", &allocate_at) ||
+        !StringMember(component, "releaseAt", &release_at) ||
+        !StringMember(component, "expression", &expression) ||
+        requirements == nullptr || requirements->type != JsonValue::Type::Array) {
+      components_valid = false;
+      break;
+    }
+    const ExpectedMemoryComponent& expected = expected_components.at(category);
+    if (allocate_at != expected.allocate_at || release_at != expected.release_at ||
+        expression != expected.expression ||
+        requirements->array.size() != expected.requirements.size()) {
+      components_valid = false;
+      break;
+    }
+    for (size_t index = 0U; index < requirements->array.size(); ++index) {
+      if (requirements->array[index].type != JsonValue::Type::String ||
+          requirements->array[index].string != expected.requirements[index]) {
+        components_valid = false;
+        break;
+      }
+    }
+    if (validated->materialized) {
+      uint64_t peak_bytes = 0U;
+      if (!NonNegativeUint64Member(component, "peakBytes", &peak_bytes) ||
+          !SafeMultiplyAdd(peak_bytes, 1U, &validated->peak_bytes)) {
+        components_valid = false;
+        break;
+      }
+      validated->component_bytes[category] = peak_bytes;
+    } else if (Member(component, "peakBytes") != nullptr) {
+      components_valid = false;
+      break;
+    }
+    observed_categories[category] = true;
+  }
+  if (!components_valid ||
+      observed_categories.size() != expected_components.size()) {
+    Reject(
+        contract,
+        "TARGET_MEMORY_COMPONENTS_INVALID",
+        "The Memory Event Plan component lifetimes are incomplete.",
+        "Declare all seven memory categories with expressions and bindings.");
+    return false;
+  }
+  if (validated->symbolic) {
+    std::string base_hbm;
+    std::string reserve_hbm;
+    std::string usable_hbm;
+    std::string planned_peak;
+    std::string observed_peak;
+    if (!StringMember(*capacity, "baseHbmB", &base_hbm) ||
+        !StringMember(*capacity, "reserveHbmB", &reserve_hbm) ||
+        !StringMember(*capacity, "scenarioUsableHbmB", &usable_hbm) ||
+        !StringMember(*capacity, "plannedPeakHbmB", &planned_peak) ||
+        !StringMember(
+            *capacity, "observedExecutionPeakHbmB", &observed_peak) ||
+        base_hbm != "UNKNOWN" || reserve_hbm != "UNKNOWN" ||
+        usable_hbm != "UNKNOWN" || planned_peak != "UNKNOWN" ||
+        observed_peak != "UNKNOWN") {
+      Reject(
+          contract,
+          "TARGET_MEMORY_SYMBOLIC_CAPACITY_INVALID",
+          "Unbound memory capacity fields must remain UNKNOWN.",
+          "Do not fabricate HBM numbers before all policies are bound.");
+      return false;
+    }
+    return true;
+  }
+
+  uint64_t declared_usable_hbm = 0U;
+  uint64_t declared_peak = 0U;
+  if (!PositiveUint64Member(
+          *capacity, "baseHbmB", &validated->base_hbm_bytes) ||
+      !NonNegativeUint64Member(
+          *capacity, "reserveHbmB", &validated->reserve_hbm_bytes) ||
+      !PositiveUint64Member(
+          *capacity, "scenarioUsableHbmB", &declared_usable_hbm) ||
+      !NonNegativeUint64Member(
+          *capacity, "plannedPeakHbmB", &declared_peak) ||
+      validated->reserve_hbm_bytes >= validated->base_hbm_bytes ||
+      declared_usable_hbm !=
+          validated->base_hbm_bytes - validated->reserve_hbm_bytes ||
+      declared_peak != validated->peak_bytes) {
+    Reject(
+        contract,
+        "TARGET_MEMORY_CAPACITY_MISMATCH",
+        "Memory capacity or component peak accounting is inconsistent.",
+        "Use usable=base-reserve and planned peak=sum(component peaks)." );
+    return false;
+  }
+  validated->usable_hbm_bytes = declared_usable_hbm;
+  validated->search_limit_bytes = FloorPercent(declared_usable_hbm, 95U);
+  validated->search_gate = validated->peak_bytes <= validated->search_limit_bytes
+      ? "PASS"
+      : "FAIL";
+
+  const JsonValue* observed_execution_peak =
+      Member(*capacity, "observedExecutionPeakHbmB");
+  if (observed_execution_peak == nullptr) {
+    Reject(
+        contract,
+        "TARGET_MEMORY_CAPACITY_MISMATCH",
+        "The execution peak field is missing.",
+        "Use UNKNOWN or a nonnegative observed execution peak in bytes.");
+    return false;
+  }
+  if (observed_execution_peak->type == JsonValue::Type::String) {
+    if (observed_execution_peak->string != "UNKNOWN") {
+      Reject(
+          contract,
+          "TARGET_MEMORY_CAPACITY_MISMATCH",
+          "The execution peak sentinel is invalid.",
+          "Use exactly UNKNOWN until an execution peak is available.");
+      return false;
+    }
+  } else if (!NonNegativeUint64Member(
+                 *capacity,
+                 "observedExecutionPeakHbmB",
+                 &validated->execution_peak_bytes)) {
+    Reject(
+        contract,
+        "TARGET_MEMORY_CAPACITY_MISMATCH",
+        "The observed execution peak is invalid.",
+        "Use UNKNOWN or a nonnegative JSON-safe integer byte count.");
+    return false;
+  } else {
+    validated->execution_peak_known = true;
+  }
+  validated->execution_boundary_bytes =
+      FloorPercent(validated->base_hbm_bytes, 85U);
+  const uint64_t fractional_numerator =
+      (validated->base_hbm_bytes % 100U) * 85U;
+  const bool boundary_is_exact = fractional_numerator % 100U == 0U;
+  validated->execution_maximum_accepted_bytes =
+      boundary_is_exact
+          ? validated->execution_boundary_bytes - 1U
+          : validated->execution_boundary_bytes;
+  if (validated->execution_peak_known) {
+    validated->execution_gate =
+        validated->execution_peak_bytes <=
+                validated->execution_maximum_accepted_bytes
+            ? "PASS"
+            : "INVALID_ACCURACY_EXECUTION";
+  }
+  return true;
+}
+
+bool LoadTargetMemoryPlan(
+    const JsonValue& target_workload,
+    AnalyticalRunContract* contract) {
+  const JsonValue* memory_reference =
+      Member(target_workload, "memory_event_plan");
+  if (memory_reference == nullptr) {
+    RejectUnsupported(
+        contract,
+        "TARGET_MEMORY_EVENT_PLAN_REQUIRED",
+        "The Target Workload has no Memory Event Plan.",
+        "Provide target_workload.memory_event_plan with a SHA-256 reference.");
+    return false;
+  }
+  const ArtifactLoadPolicy memory_policy = {
+      "TARGET_MEMORY_REFERENCE_INVALID",
+      "The Target Memory Event Plan reference is invalid.",
+      "Provide memory_event_plan.path and its SHA-256 digest.",
+      "TARGET_MEMORY_NOT_FOUND",
+      "The Target Memory Event Plan could not be read.",
+      "Provide a readable public Memory Event Plan.",
+      "TARGET_MEMORY_DIGEST_MISMATCH",
+      "The Target Memory Event Plan does not match its declared digest.",
+      "Use the intended immutable Memory Event Plan or update its digest.",
+      "TARGET_MEMORY_INVALID_JSON",
+      "The Target Memory Event Plan is not valid JSON.",
+      "Correct the Memory Event Plan JSON and retry."};
+  LoadedArtifact memory_artifact;
+  if (!LoadArtifact(
+          *memory_reference, memory_policy, contract, &memory_artifact)) {
+    return false;
+  }
+  contract->target_memory_event_plan_sha256 = memory_artifact.sha256;
+  ValidatedTargetMemoryPlan memory;
+  if (!ValidateTargetMemoryPlan(
+          memory_artifact.document, *contract, contract, &memory)) {
+    return false;
+  }
+  contract->target_memory_event_plan_ready = true;
+  contract->target_memory_evidence_level = memory.evidence_level;
+  contract->target_memory_field_readiness = memory.field_readiness;
+  contract->target_memory_symbolic = memory.symbolic;
+  contract->target_memory_materialized = memory.materialized;
+  if (memory.materialized) {
+    contract->target_precision_policy_sha256 =
+        memory.binding_digests.at("precision");
+    contract->target_optimizer_policy_sha256 =
+        memory.binding_digests.at("optimizer");
+    contract->target_placement_sha256 = memory.binding_digests.at("placement");
+    contract->target_recomputation_policy_sha256 =
+        memory.binding_digests.at("recomputation");
+    contract->target_runtime_profile_sha256 =
+        memory.binding_digests.at("runtime");
+    contract->target_memory_parameters_B =
+        memory.component_bytes.at("PARAMETERS");
+    contract->target_memory_gradients_B =
+        memory.component_bytes.at("GRADIENTS");
+    contract->target_memory_optimizer_states_B =
+        memory.component_bytes.at("OPTIMIZER_STATES");
+    contract->target_memory_activations_B =
+        memory.component_bytes.at("ACTIVATIONS");
+    contract->target_memory_communication_buffers_B =
+        memory.component_bytes.at("COMMUNICATION_BUFFERS");
+    contract->target_memory_expert_placement_B =
+        memory.component_bytes.at("EXPERT_PLACEMENT");
+    contract->target_memory_recomputation_B =
+        memory.component_bytes.at("RECOMPUTATION");
+    contract->target_memory_peak_B = memory.peak_bytes;
+    contract->target_memory_base_hbm_B = memory.base_hbm_bytes;
+    contract->target_memory_reserve_hbm_B = memory.reserve_hbm_bytes;
+    contract->target_memory_scenario_usable_hbm_B = memory.usable_hbm_bytes;
+    contract->target_memory_search_limit_B = memory.search_limit_bytes;
+    contract->target_memory_execution_peak_known = memory.execution_peak_known;
+    contract->target_memory_execution_peak_B = memory.execution_peak_bytes;
+    contract->target_memory_execution_boundary_B =
+        memory.execution_boundary_bytes;
+    contract->target_memory_execution_maximum_accepted_B =
+        memory.execution_maximum_accepted_bytes;
+    contract->target_memory_search_gate = memory.search_gate;
+    contract->target_memory_execution_gate = memory.execution_gate;
+  }
+  return true;
+}
+
+bool ValidateTargetWorkloadComposition(
+    const JsonValue& target_workload,
+    const JsonValue& workload,
+    AnalyticalRunContract* contract) {
+  std::string schema_version;
+  std::string composition;
+  std::string declared_composite;
+  std::string workload_binding;
+  if (!StringMember(target_workload, "schema_version", &schema_version) ||
+      schema_version != "simai.target.workload/v1" ||
+      !StringMember(target_workload, "composition", &composition) ||
+      composition != "SHA256_NEWLINE_DELIMITED_RESOURCE_DIGESTS_V1" ||
+      !StringMember(target_workload, "sha256", &declared_composite) ||
+      !IsSha256Identifier(declared_composite)) {
+    Reject(
+        contract,
+        "TARGET_WORKLOAD_SCHEMA_INVALID",
+        "The Target Workload composition envelope is invalid.",
+        "Use simai.target.workload/v1 and the declared digest algorithm.");
+    return false;
+  }
+  const std::string digest_input =
+      contract->target_model_sha256 + "\n" +
+      contract->target_step_sha256 + "\n" +
+      contract->target_routing_sha256 + "\n" +
+      contract->target_memory_event_plan_sha256;
+  const std::string computed_composite = "sha256:" + Sha256Hex(digest_input);
+  contract->target_workload_sha256 = computed_composite;
+  if (declared_composite != computed_composite) {
+    Reject(
+        contract,
+        "TARGET_WORKLOAD_DIGEST_MISMATCH",
+        "The Target Workload composite digest is inconsistent.",
+        "Hash model, step, routing, and memory digests in canonical order.");
+    return false;
+  }
+  if (!StringMember(workload, "target_workload_sha256", &workload_binding) ||
+      workload_binding != computed_composite) {
+    Reject(
+        contract,
+        "TARGET_WORKLOAD_BINDING_MISMATCH",
+        "The AICB workload is not bound to this Target Workload digest.",
+        "Set workload.target_workload_sha256 to the composite digest.");
+    return false;
+  }
+  contract->target_workload_ready = true;
+  return true;
+}
+
+void RejectAccuracyExecution(
+    AnalyticalRunContract* contract,
+    const std::string& reject_code,
+    const std::string& message,
+    const std::string& remediation) {
+  contract->accepted = false;
+  contract->exit_code = 5;
+  contract->status = "INVALID_ACCURACY_EXECUTION";
+  contract->reject_code = reject_code;
+  contract->message = message;
+  contract->remediation = remediation;
+}
+
+bool ApplyTargetMemoryGates(AnalyticalRunContract* contract) {
+  if (!contract->target_memory_materialized) {
+    return true;
+  }
+  if (contract->target_memory_search_gate == "FAIL") {
+    contract->target_memory_gate_failed = true;
+    Reject(
+        contract,
+        "HBM_SEARCH_LIMIT_EXCEEDED",
+        "The planned peak exceeds 95 percent of Scenario Usable HBM.",
+        "Reduce component peaks or provide a larger explicit usable budget.");
+    return false;
+  }
+  if (contract->target_memory_execution_gate ==
+      "INVALID_ACCURACY_EXECUTION") {
+    contract->target_memory_gate_failed = true;
+    RejectAccuracyExecution(
+        contract,
+        "HBM_EXECUTION_LIMIT_REACHED",
+        "The observed A2/A3 peak is not strictly below 85 percent of base HBM.",
+        "Lower execution occupancy before admitting this accuracy sample.");
     return false;
   }
   return true;
@@ -2519,6 +3625,21 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
   }
   contract.workload_digest_verified = true;
 
+  const JsonValue* target_workload = Member(root, "target_workload");
+  contract.target_workload_present = target_workload != nullptr;
+  if (target_workload != nullptr) {
+    if (target_workload->type != JsonValue::Type::Object ||
+        !LoadTargetModel(*target_workload, &contract) ||
+        !LoadTargetStep(*target_workload, &contract) ||
+        !LoadTargetRouting(*target_workload, &contract) ||
+        !LoadTargetMemoryPlan(*target_workload, &contract) ||
+        !ValidateTargetWorkloadComposition(
+            *target_workload, *workload, &contract) ||
+        !ApplyTargetMemoryGates(&contract)) {
+      return contract;
+    }
+  }
+
   const JsonValue* device_profile = Member(root, "device_profile");
   const JsonValue* legacy_gpu = Member(root, "legacy_gpu");
   contract.device_profile_present = device_profile != nullptr;
@@ -2701,13 +3822,15 @@ bool WriteAnalyticalResultManifest(
          << ",\n"
          << "    \"accelerator\": " << Quote(accelerator) << ",\n";
   if (contract.ascend_profiled) {
-    output << "    \"gpu_count\": " << contract.ascend_rank_count << "\n";
+    output << "    \"gpu_count\": " << contract.ascend_rank_count << ",\n";
   } else if (contract.legacy_gpu.gpu_count > 0) {
-    output << "    \"gpu_count\": " << contract.legacy_gpu.gpu_count << "\n";
+    output << "    \"gpu_count\": " << contract.legacy_gpu.gpu_count << ",\n";
   } else {
-    output << "    \"gpu_count\": \"UNKNOWN\"\n";
+    output << "    \"gpu_count\": \"UNKNOWN\",\n";
   }
-  output << "  },\n"
+  output << "    \"target_workload_sha256\": "
+         << Quote(contract.target_workload_sha256) << "\n"
+         << "  },\n"
          << "  \"provenance\": {\n"
          << "    \"source_repository\": \"SimAI-Ascend\",\n"
          << "    \"source_revision\": \"UNKNOWN\",\n"
@@ -2728,7 +3851,17 @@ bool WriteAnalyticalResultManifest(
          << "    \"raw_observation_sha256\": "
          << Quote(contract.raw_observation_sha256) << ",\n"
          << "    \"routing_sha256\": "
-         << Quote(contract.routing_sha256) << "\n"
+         << Quote(contract.routing_sha256) << ",\n"
+         << "    \"target_model_sha256\": "
+         << Quote(contract.target_model_sha256) << ",\n"
+         << "    \"target_step_sha256\": "
+         << Quote(contract.target_step_sha256) << ",\n"
+         << "    \"target_routing_sha256\": "
+         << Quote(contract.target_routing_sha256) << ",\n"
+         << "    \"target_memory_event_plan_sha256\": "
+         << Quote(contract.target_memory_event_plan_sha256) << ",\n"
+         << "    \"target_workload_sha256\": "
+         << Quote(contract.target_workload_sha256) << "\n"
          << "  },\n"
          << "  \"evidence\": {\n"
          << "    \"workload\": {\"level\": "
@@ -2757,7 +3890,28 @@ bool WriteAnalyticalResultManifest(
          << Quote(contract.cost_model_evidence_level)
          << ", \"digest\": " << Quote(contract.cost_model_sha256)
          << ", \"readiness\": "
-         << Quote(contract.cost_model_field_readiness) << "}\n"
+         << Quote(contract.cost_model_field_readiness) << "},\n"
+         << "    \"target_model\": {\"level\": "
+         << Quote(contract.target_model_evidence_level)
+         << ", \"digest\": " << Quote(contract.target_model_sha256)
+         << ", \"readiness\": "
+         << Quote(contract.target_model_field_readiness) << "},\n"
+         << "    \"target_step\": {\"level\": "
+         << Quote(contract.target_step_evidence_level)
+         << ", \"digest\": " << Quote(contract.target_step_sha256)
+         << ", \"readiness\": "
+         << Quote(contract.target_step_field_readiness) << "},\n"
+         << "    \"target_routing\": {\"level\": "
+         << Quote(contract.target_routing_evidence_level)
+         << ", \"digest\": " << Quote(contract.target_routing_sha256)
+         << ", \"readiness\": "
+         << Quote(contract.target_routing_field_readiness) << "},\n"
+         << "    \"target_memory_event_plan\": {\"level\": "
+         << Quote(contract.target_memory_evidence_level)
+         << ", \"digest\": "
+         << Quote(contract.target_memory_event_plan_sha256)
+         << ", \"readiness\": "
+         << Quote(contract.target_memory_field_readiness) << "}\n"
          << "  },\n"
          << "  \"readiness\": {\n"
          << "    \"contract\": " << Quote(valid ? "READY" : "BLOCKED") << ",\n"
@@ -2787,7 +3941,39 @@ bool WriteAnalyticalResultManifest(
                              : (valid ? "READY" : "BLOCKED"))
                       : "NOT_REQUIRED")
          << ",\n"
-         << "    \"hbm\": \"UNKNOWN\",\n"
+         << "    \"target_model\": "
+         << Quote(contract.target_workload_present
+                      ? (contract.target_model_ready ? "READY" : "BLOCKED")
+                      : "NOT_REQUIRED")
+         << ",\n"
+         << "    \"target_step\": "
+         << Quote(contract.target_workload_present
+                      ? (contract.target_step_ready ? "READY" : "BLOCKED")
+                      : "NOT_REQUIRED")
+         << ",\n"
+         << "    \"target_routing\": "
+         << Quote(contract.target_workload_present
+                      ? (contract.target_routing_ready ? "READY" : "BLOCKED")
+                      : "NOT_REQUIRED")
+         << ",\n"
+         << "    \"target_memory_event_plan\": "
+         << Quote(contract.target_workload_present
+                      ? (contract.target_memory_event_plan_ready
+                             ? "READY"
+                             : "BLOCKED")
+                      : "NOT_REQUIRED")
+         << ",\n"
+         << "    \"target_workload\": "
+         << Quote(contract.target_workload_present
+                      ? (contract.target_workload_ready ? "READY" : "BLOCKED")
+                      : "NOT_REQUIRED")
+         << ",\n"
+         << "    \"hbm\": "
+         << Quote(contract.target_memory_materialized
+                      ? (contract.target_memory_gate_failed ? "BLOCKED"
+                                                           : "READY")
+                      : "UNKNOWN")
+         << ",\n"
          << "    \"traffic\": "
          << Quote(valid && contract.ascend_profiled ? "READY" : "UNKNOWN")
          << "\n"
@@ -2800,8 +3986,111 @@ bool WriteAnalyticalResultManifest(
   } else {
     output << "\"UNKNOWN\",\n";
   }
-  output << "    \"hbm_peak_B\": \"UNKNOWN\",\n"
-         << "    \"traffic_B\": ";
+  output << "    \"hbm_peak_B\": ";
+  if (contract.target_memory_materialized) {
+    output << contract.target_memory_peak_B << ",\n";
+  } else {
+    output << "\"UNKNOWN\",\n";
+  }
+  output << "    \"memory\": ";
+  if (contract.target_memory_symbolic) {
+    output
+        << "{\"unit\": \"B\", "
+        << "\"aggregation\": \"CONSERVATIVE_COMPONENT_PEAK_SUM\", "
+        << "\"bindings\": {\"precision\": \"UNBOUND\", "
+        << "\"optimizer\": \"UNBOUND\", \"placement\": \"UNBOUND\", "
+        << "\"recomputation\": \"UNBOUND\", \"runtime\": \"UNBOUND\"}, "
+        << "\"components\": {"
+        << "\"parameters\": {\"state\": \"SYMBOLIC\", \"unit\": \"B\", "
+        << "\"value\": \"UNKNOWN\", \"expression\": "
+        << Quote("logical trainable tensors * training parameter precision / parameter shards")
+        << "}, \"gradients\": {\"state\": \"SYMBOLIC\", \"unit\": \"B\", "
+        << "\"value\": \"UNKNOWN\", \"expression\": "
+        << Quote("logical trainable tensors * gradient precision / gradient shards")
+        << "}, \"optimizer_states\": {\"state\": \"SYMBOLIC\", \"unit\": \"B\", "
+        << "\"value\": \"UNKNOWN\", \"expression\": "
+        << Quote("optimizer state tensors and optional master weights / optimizer shards")
+        << "}, \"activations\": {\"state\": \"SYMBOLIC\", \"unit\": \"B\", "
+        << "\"value\": \"UNKNOWN\", \"expression\": "
+        << Quote("saved activation shape trace after recomputation selection")
+        << "}, \"communication_buffers\": {\"state\": \"SYMBOLIC\", "
+        << "\"unit\": \"B\", \"value\": \"UNKNOWN\", \"expression\": "
+        << Quote("dispatch combine collective and runtime scratch buffers")
+        << "}, \"expert_placement\": {\"state\": \"SYMBOLIC\", "
+        << "\"unit\": \"B\", \"value\": \"UNKNOWN\", \"expression\": "
+        << Quote("local routed expert weights and maximum local expert load")
+        << "}, \"recomputation\": {\"state\": \"SYMBOLIC\", "
+        << "\"unit\": \"B\", \"value\": \"UNKNOWN\", \"expression\": "
+        << Quote("recomputed activation and observed kernel workspace")
+        << "}}, \"peak_per_rank_B\": \"UNKNOWN\", "
+        << "\"search_95_percent_gate\": \"UNKNOWN\", "
+        << "\"a2_a3_execution_85_percent_gate\": \"UNKNOWN\"},\n";
+  } else if (contract.target_memory_materialized) {
+    output
+        << "{\"unit\": \"B\", "
+        << "\"aggregation\": \"CONSERVATIVE_COMPONENT_PEAK_SUM\", "
+        << "\"bindings\": {"
+        << "\"precision\": {\"state\": \"BOUND\", \"sha256\": "
+        << Quote(contract.target_precision_policy_sha256)
+        << "}, \"optimizer\": {\"state\": \"BOUND\", \"sha256\": "
+        << Quote(contract.target_optimizer_policy_sha256)
+        << "}, \"placement\": {\"state\": \"BOUND\", \"sha256\": "
+        << Quote(contract.target_placement_sha256)
+        << "}, \"recomputation\": {\"state\": \"BOUND\", \"sha256\": "
+        << Quote(contract.target_recomputation_policy_sha256)
+        << "}, \"runtime\": {\"state\": \"BOUND\", \"sha256\": "
+        << Quote(contract.target_runtime_profile_sha256)
+        << "}}, \"components\": {"
+        << "\"parameters\": {\"state\": \"MATERIALIZED\", \"unit\": \"B\", "
+        << "\"value\": " << contract.target_memory_parameters_B
+        << "}, \"gradients\": {\"state\": \"MATERIALIZED\", \"unit\": \"B\", "
+        << "\"value\": " << contract.target_memory_gradients_B
+        << "}, \"optimizer_states\": {\"state\": \"MATERIALIZED\", "
+        << "\"unit\": \"B\", \"value\": "
+        << contract.target_memory_optimizer_states_B
+        << "}, \"activations\": {\"state\": \"MATERIALIZED\", "
+        << "\"unit\": \"B\", \"value\": "
+        << contract.target_memory_activations_B
+        << "}, \"communication_buffers\": {\"state\": \"MATERIALIZED\", "
+        << "\"unit\": \"B\", \"value\": "
+        << contract.target_memory_communication_buffers_B
+        << "}, \"expert_placement\": {\"state\": \"MATERIALIZED\", "
+        << "\"unit\": \"B\", \"value\": "
+        << contract.target_memory_expert_placement_B
+        << "}, \"recomputation\": {\"state\": \"MATERIALIZED\", "
+        << "\"unit\": \"B\", \"value\": "
+        << contract.target_memory_recomputation_B
+        << "}}, \"peak_per_rank_B\": " << contract.target_memory_peak_B
+        << ", \"capacity\": {\"base_hbm_B\": "
+        << contract.target_memory_base_hbm_B
+        << ", \"reserve_hbm_B\": " << contract.target_memory_reserve_hbm_B
+        << ", \"scenario_usable_hbm_B\": "
+        << contract.target_memory_scenario_usable_hbm_B
+        << "}, \"search_limit\": {\"percent\": 95, "
+        << "\"denominator\": \"SCENARIO_USABLE_HBM_B\", "
+        << "\"rounding\": \"FLOOR_INTEGER_BYTES\", \"maximum_allowed_B\": "
+        << contract.target_memory_search_limit_B
+        << "}, \"search_95_percent_gate\": "
+        << Quote(contract.target_memory_search_gate)
+        << ", \"execution_limit\": {\"percent\": 85, "
+        << "\"denominator\": \"BASE_HBM_B\", "
+        << "\"comparison\": \"STRICTLY_LESS_THAN_85_PERCENT\", "
+        << "\"rounding\": \"MAXIMUM_ACCEPTED_INTEGER_BYTES\", "
+        << "\"boundary_B\": " << contract.target_memory_execution_boundary_B
+        << ", \"maximum_accepted_B\": "
+        << contract.target_memory_execution_maximum_accepted_B
+        << "}, \"observed_execution_peak_B\": ";
+    if (contract.target_memory_execution_peak_known) {
+      output << contract.target_memory_execution_peak_B;
+    } else {
+      output << "\"UNKNOWN\"";
+    }
+    output << ", \"a2_a3_execution_85_percent_gate\": "
+           << Quote(contract.target_memory_execution_gate) << "},\n";
+  } else {
+    output << "\"UNKNOWN\",\n";
+  }
+  output << "    \"traffic_B\": ";
   if (valid && contract.ascend_profiled) {
     output << cost_summary.total_traffic_bytes << ",\n";
   } else {
@@ -2830,6 +4119,65 @@ bool WriteAnalyticalResultManifest(
            << cost_summary.output_bytes_per_rank
            << ", \"routing_sha256\": "
            << Quote(cost_summary.routing_digest) << "},\n";
+  } else {
+    output << "\"UNKNOWN\",\n";
+  }
+  output << "    \"target_workload\": ";
+  if (contract.target_model_ready) {
+    output << "{\"model\": {\"logical_trainable_parameters\": "
+           << contract.target_logical_trainable_parameters
+           << ", \"parameter_unit\": \"count\""
+           << ", \"routed_experts\": " << contract.target_routed_experts
+           << ", \"top_k\": " << contract.target_top_k
+           << ", \"expert_intermediate_size\": "
+           << contract.target_expert_intermediate_size
+           << ", \"shared_experts\": " << contract.target_shared_experts
+           << ", \"active_logical_parameters\": {"
+           << "\"main_blocks_only\": "
+           << contract.target_active_main_blocks_parameters
+           << ", \"main_forward_including_io\": "
+           << contract.target_active_main_forward_parameters
+           << ", \"training_graph_including_mtp\": "
+           << contract.target_active_training_graph_parameters
+           << ", \"unit\": \"count\"}"
+           << ", \"checkpoint_storage\": {\"value\": "
+           << contract.target_checkpoint_storage_bytes
+           << ", \"unit\": \"B\", \"semantics\": "
+           << "\"FIXED_QUANTIZED_CHECKPOINT_ONLY_NOT_TRAINING_HBM\""
+           << ", \"used_as_training_hbm\": false}"
+           << "}, \"step\": ";
+    if (contract.target_step_ready) {
+      output << "{\"formula\": \"sequence * MBS * DP * GA\""
+             << ", \"sequence_tokens\": " << contract.target_sequence_tokens
+             << ", \"micro_batch_sequences\": "
+             << contract.target_micro_batch_sequences
+             << ", \"data_parallel_replicas\": "
+             << contract.target_data_parallel_replicas
+             << ", \"gradient_accumulation\": "
+             << contract.target_gradient_accumulation
+             << ", \"configured_gts\": " << contract.target_configured_gts
+             << ", \"gts_limit\": 500000000"
+             << ", \"configured_routed_assignment_slots_upper_bound\": "
+             << contract.target_routed_assignment_slots
+             << "}, \"aicb_execution_binding\": ";
+      if (contract.target_workload_ready) {
+        output << "{\"workload_sha256\": " << Quote(contract.workload_sha256)
+               << ", \"model_sha256\": "
+               << Quote(contract.target_model_sha256)
+               << ", \"step_sha256\": "
+               << Quote(contract.target_step_sha256)
+               << ", \"routing_sha256\": "
+               << Quote(contract.target_routing_sha256)
+               << ", \"memory_event_plan_sha256\": "
+               << Quote(contract.target_memory_event_plan_sha256)
+               << ", \"target_workload_sha256\": "
+               << Quote(contract.target_workload_sha256) << "}},\n";
+      } else {
+        output << "\"UNKNOWN\"},\n";
+      }
+    } else {
+      output << "\"UNKNOWN\", \"aicb_execution_binding\": \"UNKNOWN\"},\n";
+    }
   } else {
     output << "\"UNKNOWN\",\n";
   }

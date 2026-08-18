@@ -144,6 +144,133 @@ class AnalyticalRunContractTest(unittest.TestCase):
             result = json.loads(result_path.read_text())
         return completed, result
 
+    def run_mutated_target_contract(
+        self,
+        *,
+        mutate_model=None,
+        mutate_step=None,
+        mutate_routing=None,
+        mutate_memory=None,
+        mutate_manifest=None,
+    ):
+        """Rebind all Target Workload digests, then run the real process."""
+        model = json.loads(
+            (FIXTURES / "target_10t_model_manifest.json").read_text()
+        )
+        step = json.loads(
+            (FIXTURES / "target_500m_step_manifest.json").read_text()
+        )
+        routing = json.loads(
+            (FIXTURES / "target_hash_routing_artifact.json").read_text()
+        )
+        memory = json.loads(
+            (FIXTURES / "target_symbolic_memory_event_plan.json").read_text()
+        )
+        manifest = json.loads(
+            (FIXTURES / "target_10t_symbolic_run.json").read_text()
+        )
+        if mutate_model is not None:
+            mutate_model(model)
+
+        with tempfile.TemporaryDirectory(prefix="simai-target-contract-") as temp_dir:
+            run_directory = self.prepare_run_directory(temp_dir)
+
+            def write_artifact(name, document):
+                path = run_directory / name
+                path.write_text(json.dumps(document, indent=2) + "\n")
+                digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+                return path, digest
+
+            model_path, model_digest = write_artifact("model.json", model)
+            step["spec"]["modelDigest"] = model_digest
+            if mutate_step is not None:
+                mutate_step(step)
+            step_path, step_digest = write_artifact("step.json", step)
+
+            routing["spec"]["modelDigest"] = model_digest
+            routing["spec"]["stepDigest"] = step_digest
+            if mutate_routing is not None:
+                mutate_routing(routing)
+            routing_path, routing_digest = write_artifact("routing.json", routing)
+
+            memory["spec"]["modelDigest"] = model_digest
+            memory["spec"]["stepDigest"] = step_digest
+            memory["spec"]["routingDigest"] = routing_digest
+            if mutate_memory is not None:
+                mutate_memory(memory)
+            memory_path, memory_digest = write_artifact("memory.json", memory)
+
+            resource_digests = (
+                model_digest,
+                step_digest,
+                routing_digest,
+                memory_digest,
+            )
+            composite_digest = "sha256:" + hashlib.sha256(
+                "\n".join(resource_digests).encode()
+            ).hexdigest()
+            target = manifest["target_workload"]
+            target["sha256"] = composite_digest
+            for key, path, digest in (
+                ("model", model_path, model_digest),
+                ("step", step_path, step_digest),
+                ("routing", routing_path, routing_digest),
+                ("memory_event_plan", memory_path, memory_digest),
+            ):
+                target[key] = {"path": str(path), "sha256": digest}
+            workload_path = FIXTURES / "minimal_workload.txt"
+            manifest["workload"]["path"] = str(workload_path)
+            manifest["workload"]["target_workload_sha256"] = composite_digest
+            if mutate_manifest is not None:
+                mutate_manifest(manifest)
+            manifest_path, _ = write_artifact("run.json", manifest)
+            result_path = run_directory / "result.json"
+            completed = subprocess.run(
+                [
+                    str(self.binary),
+                    "--run-manifest",
+                    str(manifest_path),
+                    "--result-manifest",
+                    str(result_path),
+                ],
+                cwd=run_directory,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+            result = json.loads(result_path.read_text())
+        return completed, result
+
+    @staticmethod
+    def materialize_memory_plan(
+        memory,
+        *,
+        base_hbm_B,
+        reserve_hbm_B,
+        component_values,
+        observed_execution_peak_B="UNKNOWN",
+    ):
+        for index, binding_name in enumerate(
+            ("precision", "optimizer", "placement", "recomputation", "runtime"),
+            start=1,
+        ):
+            memory["spec"]["bindings"][binding_name] = {
+                "state": "BOUND",
+                "sha256": "sha256:" + str(index) * 64,
+            }
+        for component in memory["spec"]["components"]:
+            component["peakBytes"] = component_values[component["category"]]
+        planned_peak = sum(component_values.values())
+        memory["spec"]["capacity"] = {
+            "baseHbmB": base_hbm_B,
+            "reserveHbmB": reserve_hbm_B,
+            "scenarioUsableHbmB": base_hbm_B - reserve_hbm_B,
+            "plannedPeakHbmB": planned_peak,
+            "observedExecutionPeakHbmB": observed_execution_peak_B,
+        }
+
     def run_generated_legacy_contract(
         self,
         workload_token,
@@ -692,6 +819,585 @@ class AnalyticalRunContractTest(unittest.TestCase):
         self.assertNotIn(str(manifest_path), serialized)
         self.assertNotIn("tests/contract/fixtures/minimal_workload.txt", serialized)
         self.assertIsNone(re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", serialized))
+
+    def test_target_10t_model_manifest_reports_frozen_logical_parameters(self):
+        completed, result, _ = self.run_contract("target_10t_symbolic_run.json")
+
+        self.assertEqual(
+            completed.returncode,
+            0,
+            msg=f"stdout:\n{completed.stdout[-2000:]}\nstderr:\n{completed.stderr[-2000:]}",
+        )
+        # Independent oracle: the production validator totals frozen tensor
+        # groups. This test instead applies the accepted architecture transform
+        # to the independently known official baseline.
+        official_baseline = 1_598_837_347_742
+        added_experts = 2048 - 384
+        moe_layers = 61 + 1
+        added_expert_weights = added_experts * moe_layers * (3 * 7168 * 3072)
+        added_router_weights = added_experts * moe_layers * 7168
+        added_router_biases = added_experts * (61 - 3 + 1)
+        independent_parameter_oracle = (
+            official_baseline
+            + added_expert_weights
+            + added_router_weights
+            + added_router_biases
+        )
+        self.assertEqual(independent_parameter_oracle, 8_414_884_746_526)
+
+        model = result["results"]["target_workload"]["model"]
+        self.assertEqual(
+            model["logical_trainable_parameters"], independent_parameter_oracle
+        )
+        self.assertEqual(model["routed_experts"], 2048)
+        self.assertEqual(model["top_k"], 16)
+        self.assertEqual(model["expert_intermediate_size"], 3072)
+        self.assertEqual(model["shared_experts"], 1)
+        self.assertEqual(model["parameter_unit"], "count")
+        self.assertRegex(result["provenance"]["target_model_sha256"], SHA256_ID)
+        self.assertEqual(result["readiness"]["target_model"], "READY")
+
+    def test_target_model_identity_and_tensor_counting_are_frozen(self):
+        mutations = (
+            lambda model: model["spec"]["architecture"].update(
+                {"routedExperts": 2047}
+            ),
+            lambda model: model["spec"]["architecture"].update({"topK": 15}),
+            lambda model: model["spec"]["architecture"].update(
+                {"expertIntermediateSize": 3071}
+            ),
+            lambda model: model["spec"]["architecture"].update(
+                {"sharedExperts": 2}
+            ),
+            lambda model: model["spec"].update(
+                {"logicalTrainableParameters": 8_414_884_746_525}
+            ),
+            lambda model: model["spec"]["tensorManifest"]["groups"][1].update(
+                {"logicalElementsPerInstance": 66_060_287}
+            ),
+            lambda model: model["spec"]["checkpointStorage"].update(
+                {"value": 8_414_884_746_526}
+            ),
+        )
+        for index, mutation in enumerate(mutations):
+            with self.subTest(index=index):
+                completed, result = self.run_mutated_target_contract(
+                    mutate_model=mutation
+                )
+
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(
+                    result["reject_code"], "TARGET_MODEL_IDENTITY_MISMATCH"
+                )
+                self.assertEqual(result["readiness"]["target_model"], "BLOCKED")
+
+    def test_gts_exact_limit_is_accepted_and_reported(self):
+        completed, result = self.run_mutated_target_contract()
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(result["status"], "VALID")
+        step = result["results"]["target_workload"]["step"]
+        # Independent oracle: production uses checked uint64 multiplication
+        # while this assertion uses Python's arbitrary-precision integers.
+        independent_gts_oracle = 15625 * 1 * 32 * 1000
+        independent_assignment_oracle = independent_gts_oracle * 16 * 62
+        self.assertEqual(independent_gts_oracle, 500_000_000)
+        self.assertEqual(independent_assignment_oracle, 496_000_000_000)
+        self.assertEqual(step["formula"], "sequence * MBS * DP * GA")
+        self.assertEqual(step["sequence_tokens"], 15625)
+        self.assertEqual(step["micro_batch_sequences"], 1)
+        self.assertEqual(step["data_parallel_replicas"], 32)
+        self.assertEqual(step["gradient_accumulation"], 1000)
+        self.assertEqual(step["configured_gts"], independent_gts_oracle)
+        self.assertEqual(step["gts_limit"], 500_000_000)
+        self.assertEqual(
+            step["configured_routed_assignment_slots_upper_bound"],
+            independent_assignment_oracle,
+        )
+        self.assertRegex(result["provenance"]["target_step_sha256"], SHA256_ID)
+        self.assertEqual(result["readiness"]["target_step"], "READY")
+
+    def test_gts_above_limit_has_stable_rejection_without_erasing_model(self):
+        def exceed_limit(step):
+            step["spec"]["sequenceTokens"] = 15626
+            step["spec"]["configuredGlobalTokens"] = 500_032_000
+            step["spec"]["configuredRoutedAssignmentSlotsUpperBound"] = (
+                500_032_000 * 16 * 62
+            )
+
+        completed, result = self.run_mutated_target_contract(
+            mutate_step=exceed_limit
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(
+            result["reject_code"], "TARGET_STEP_GTS_LIMIT_EXCEEDED"
+        )
+        self.assertEqual(result["readiness"]["target_model"], "READY")
+        self.assertEqual(result["readiness"]["target_step"], "BLOCKED")
+        self.assertEqual(
+            result["results"]["target_workload"]["model"][
+                "logical_trainable_parameters"
+            ],
+            8_414_884_746_526,
+        )
+
+    def test_gts_factors_reject_zero_negative_noninteger_and_unsafe_integer(self):
+        invalid_values = (0, -1, 1.5, "1", 9_007_199_254_740_992)
+        for invalid_value in invalid_values:
+            with self.subTest(invalid_value=invalid_value):
+                completed, result = self.run_mutated_target_contract(
+                    mutate_step=lambda step, value=invalid_value: step["spec"].update(
+                        {"microBatchSequences": value}
+                    )
+                )
+
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(
+                    result["reject_code"], "TARGET_STEP_FACTOR_INVALID"
+                )
+                self.assertEqual(result["readiness"]["target_model"], "READY")
+                self.assertEqual(result["readiness"]["target_step"], "BLOCKED")
+
+    def test_gts_multiplication_overflow_is_rejected_before_limit_check(self):
+        def overflow_uint64(step):
+            step["spec"].update(
+                {
+                    "sequenceTokens": 500_000_000,
+                    "microBatchSequences": 500_000_000,
+                    "dataParallelReplicas": 500_000_000,
+                    "gradientAccumulation": 500_000_000,
+                }
+            )
+
+        completed, result = self.run_mutated_target_contract(
+            mutate_step=overflow_uint64
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["reject_code"], "TARGET_STEP_GTS_OVERFLOW")
+        self.assertEqual(result["readiness"]["target_step"], "BLOCKED")
+
+    def test_declared_gts_must_match_the_four_canonical_factors(self):
+        completed, result = self.run_mutated_target_contract(
+            mutate_step=lambda step: step["spec"].update(
+                {"configuredGlobalTokens": 499_999_999}
+            )
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["reject_code"], "TARGET_STEP_GTS_MISMATCH")
+        self.assertEqual(result["readiness"]["target_step"], "BLOCKED")
+
+    def test_target_workload_closes_four_resource_digests_and_aicb_binding(self):
+        completed, result = self.run_mutated_target_contract()
+
+        self.assertEqual(completed.returncode, 0)
+        provenance = result["provenance"]
+        resource_digests = (
+            provenance["target_model_sha256"],
+            provenance["target_step_sha256"],
+            provenance["target_routing_sha256"],
+            provenance["target_memory_event_plan_sha256"],
+        )
+        expected_composite = "sha256:" + hashlib.sha256(
+            "\n".join(resource_digests).encode()
+        ).hexdigest()
+        self.assertEqual(provenance["target_workload_sha256"], expected_composite)
+        self.assertEqual(
+            result["input_summary"]["target_workload_sha256"], expected_composite
+        )
+        self.assertEqual(
+            result["results"]["target_workload"]["aicb_execution_binding"],
+            {
+                "workload_sha256": provenance["workload_sha256"],
+                "model_sha256": resource_digests[0],
+                "step_sha256": resource_digests[1],
+                "routing_sha256": resource_digests[2],
+                "memory_event_plan_sha256": resource_digests[3],
+                "target_workload_sha256": expected_composite,
+            },
+        )
+        for resource in (
+            "target_model",
+            "target_step",
+            "target_routing",
+            "target_memory_event_plan",
+            "target_workload",
+        ):
+            self.assertEqual(result["readiness"][resource], "READY")
+        for resource in (
+            "target_model",
+            "target_step",
+            "target_routing",
+            "target_memory_event_plan",
+        ):
+            self.assertRegex(result["evidence"][resource]["digest"], SHA256_ID)
+            self.assertEqual(
+                result["evidence"][resource]["readiness"], "FIELD_UNVERIFIED"
+            )
+
+    def test_target_workload_composite_digest_mismatch_fails_closed(self):
+        wrong_digest = "sha256:" + "0" * 64
+
+        def corrupt_composite(manifest):
+            manifest["target_workload"]["sha256"] = wrong_digest
+            manifest["workload"]["target_workload_sha256"] = wrong_digest
+
+        completed, result = self.run_mutated_target_contract(
+            mutate_manifest=corrupt_composite
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(
+            result["reject_code"], "TARGET_WORKLOAD_DIGEST_MISMATCH"
+        )
+        self.assertEqual(result["readiness"]["target_memory_event_plan"], "READY")
+        self.assertEqual(result["readiness"]["target_workload"], "BLOCKED")
+
+    def test_aicb_workload_binding_must_match_target_composite(self):
+        completed, result = self.run_mutated_target_contract(
+            mutate_manifest=lambda manifest: manifest["workload"].update(
+                {"target_workload_sha256": "sha256:" + "0" * 64}
+            )
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(
+            result["reject_code"], "TARGET_WORKLOAD_BINDING_MISMATCH"
+        )
+        self.assertEqual(result["readiness"]["target_workload"], "BLOCKED")
+
+    def test_target_resource_dependency_digests_are_layered(self):
+        cases = (
+            (
+                lambda routing: routing["spec"].update(
+                    {"modelDigest": "sha256:" + "0" * 64}
+                ),
+                None,
+                "TARGET_ROUTING_MODEL_DIGEST_MISMATCH",
+            ),
+            (
+                None,
+                lambda memory: memory["spec"].update(
+                    {"stepDigest": "sha256:" + "0" * 64}
+                ),
+                "TARGET_MEMORY_RESOURCE_DIGEST_MISMATCH",
+            ),
+        )
+        for mutate_routing, mutate_memory, expected_code in cases:
+            with self.subTest(expected_code=expected_code):
+                completed, result = self.run_mutated_target_contract(
+                    mutate_routing=mutate_routing,
+                    mutate_memory=mutate_memory,
+                )
+
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(result["reject_code"], expected_code)
+                self.assertEqual(result["readiness"]["target_model"], "READY")
+                self.assertEqual(result["readiness"]["target_step"], "READY")
+
+    def test_target_routing_does_not_reuse_projected_a2a(self):
+        mutations = (
+            lambda routing: routing["spec"].update(
+                {"projectedA2ATraffic": {"totalBytes": 1}}
+            ),
+            lambda routing: routing["spec"]["policy"].update(
+                {"projectedA2ATraffic": {"totalBytes": 1}}
+            ),
+            lambda routing: routing["spec"]["policy"].update(
+                {"domainPairBytes": [[1]]}
+            ),
+            lambda routing: routing["spec"]["policy"].update(
+                {"topologyResourceLoads": {"link": 1}}
+            ),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                completed, result = self.run_mutated_target_contract(
+                    mutate_routing=mutation
+                )
+
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(
+                    result["reject_code"],
+                    "TARGET_ROUTING_PROJECTED_A2A_FORBIDDEN",
+                )
+                self.assertEqual(
+                    result["readiness"]["target_routing"], "BLOCKED"
+                )
+
+    def test_target_workload_missing_routing_resource_is_unsupported(self):
+        completed, result = self.run_mutated_target_contract(
+            mutate_manifest=lambda manifest: manifest["target_workload"].pop(
+                "routing"
+            )
+        )
+
+        self.assertEqual(completed.returncode, 3)
+        self.assertEqual(result["status"], "UNSUPPORTED")
+        self.assertEqual(result["reject_code"], "TARGET_ROUTING_REQUIRED")
+        self.assertEqual(result["readiness"]["target_routing"], "BLOCKED")
+
+    def test_target_resource_evidence_is_required_for_readiness(self):
+        completed, result = self.run_mutated_target_contract(
+            mutate_memory=lambda memory: memory["spec"].update({"evidence": []})
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["reject_code"], "TARGET_MEMORY_SCHEMA_INVALID")
+        self.assertEqual(
+            result["readiness"]["target_memory_event_plan"], "BLOCKED"
+        )
+
+    def test_unbound_memory_policies_remain_symbolic_and_checkpoint_is_not_hbm(self):
+        completed, result = self.run_mutated_target_contract()
+
+        self.assertEqual(completed.returncode, 0)
+        memory = result["results"]["memory"]
+        self.assertEqual(memory["unit"], "B")
+        self.assertEqual(
+            memory["aggregation"], "CONSERVATIVE_COMPONENT_PEAK_SUM"
+        )
+        self.assertEqual(
+            memory["bindings"],
+            {
+                "precision": "UNBOUND",
+                "optimizer": "UNBOUND",
+                "placement": "UNBOUND",
+                "recomputation": "UNBOUND",
+                "runtime": "UNBOUND",
+            },
+        )
+        expected_categories = {
+            "parameters",
+            "gradients",
+            "optimizer_states",
+            "activations",
+            "communication_buffers",
+            "expert_placement",
+            "recomputation",
+        }
+        self.assertEqual(set(memory["components"]), expected_categories)
+        for component in memory["components"].values():
+            self.assertEqual(component["state"], "SYMBOLIC")
+            self.assertEqual(component["unit"], "B")
+            self.assertEqual(component["value"], "UNKNOWN")
+            self.assertIsInstance(component["expression"], str)
+            self.assertTrue(component["expression"])
+        self.assertEqual(memory["peak_per_rank_B"], "UNKNOWN")
+        self.assertEqual(memory["search_95_percent_gate"], "UNKNOWN")
+        self.assertEqual(memory["a2_a3_execution_85_percent_gate"], "UNKNOWN")
+        self.assertEqual(result["readiness"]["hbm"], "UNKNOWN")
+        self.assertEqual(result["results"]["hbm_peak_B"], "UNKNOWN")
+
+        model = result["results"]["target_workload"]["model"]
+        self.assertEqual(
+            model["checkpoint_storage"],
+            {
+                "value": 4_486_847_493_752,
+                "unit": "B",
+                "semantics": "FIXED_QUANTIZED_CHECKPOINT_ONLY_NOT_TRAINING_HBM",
+                "used_as_training_hbm": False,
+            },
+        )
+        self.assertEqual(
+            model["active_logical_parameters"],
+            {
+                "main_blocks_only": 88_950_053_982,
+                "main_forward_including_io": 90_803_533_923,
+                "training_graph_including_mtp": 92_345_423_134,
+                "unit": "count",
+            },
+        )
+
+    def test_search_hbm_exact_95_percent_floor_passes_and_one_byte_over_fails(self):
+        component_values = {
+            "PARAMETERS": 200,
+            "GRADIENTS": 100,
+            "OPTIMIZER_STATES": 150,
+            "ACTIVATIONS": 200,
+            "COMMUNICATION_BUFFERS": 100,
+            "EXPERT_PLACEMENT": 100,
+            "RECOMPUTATION": 100,
+        }
+
+        def exact_boundary(memory):
+            self.materialize_memory_plan(
+                memory,
+                base_hbm_B=2001,
+                reserve_hbm_B=1000,
+                component_values=component_values,
+            )
+
+        exact_completed, exact_result = self.run_mutated_target_contract(
+            mutate_memory=exact_boundary
+        )
+        self.assertEqual(exact_completed.returncode, 0)
+        exact = exact_result["results"]["memory"]
+        # Independent oracle: do not reuse the production threshold helper.
+        independent_peak_oracle = sum(component_values.values())
+        independent_usable_oracle = 2001 - 1000
+        independent_search_limit_oracle = independent_usable_oracle * 95 // 100
+        self.assertEqual(independent_peak_oracle, 950)
+        self.assertEqual(independent_search_limit_oracle, 950)
+        self.assertEqual(exact["peak_per_rank_B"], independent_peak_oracle)
+        self.assertEqual(exact["capacity"]["base_hbm_B"], 2001)
+        self.assertEqual(
+            exact["capacity"]["scenario_usable_hbm_B"],
+            independent_usable_oracle,
+        )
+        self.assertEqual(exact["search_limit"]["denominator"], "SCENARIO_USABLE_HBM_B")
+        self.assertEqual(exact["search_limit"]["rounding"], "FLOOR_INTEGER_BYTES")
+        self.assertEqual(
+            exact["search_limit"]["maximum_allowed_B"],
+            independent_search_limit_oracle,
+        )
+        self.assertEqual(exact["search_95_percent_gate"], "PASS")
+        self.assertEqual(exact_result["readiness"]["hbm"], "READY")
+        self.assertEqual(exact_result["results"]["hbm_peak_B"], 950)
+
+        over_values = dict(component_values)
+        over_values["PARAMETERS"] += 1
+
+        def one_byte_over(memory):
+            self.materialize_memory_plan(
+                memory,
+                base_hbm_B=2001,
+                reserve_hbm_B=1000,
+                component_values=over_values,
+            )
+
+        over_completed, over_result = self.run_mutated_target_contract(
+            mutate_memory=one_byte_over
+        )
+        self.assertEqual(over_completed.returncode, 2)
+        self.assertEqual(over_result["reject_code"], "HBM_SEARCH_LIMIT_EXCEEDED")
+        self.assertEqual(over_result["results"]["memory"]["peak_per_rank_B"], 951)
+        self.assertEqual(
+            over_result["results"]["memory"]["search_95_percent_gate"], "FAIL"
+        )
+        self.assertEqual(over_result["readiness"]["hbm"], "BLOCKED")
+
+    def test_a2_a3_execution_requires_strictly_below_85_percent_base_hbm(self):
+        component_values = {
+            "PARAMETERS": 200,
+            "GRADIENTS": 100,
+            "OPTIMIZER_STATES": 150,
+            "ACTIVATIONS": 200,
+            "COMMUNICATION_BUFFERS": 100,
+            "EXPERT_PLACEMENT": 100,
+            "RECOMPUTATION": 100,
+        }
+
+        def run_observed(observed_peak):
+            return self.run_mutated_target_contract(
+                mutate_memory=lambda memory: self.materialize_memory_plan(
+                    memory,
+                    base_hbm_B=2000,
+                    reserve_hbm_B=1000,
+                    component_values=component_values,
+                    observed_execution_peak_B=observed_peak,
+                )
+            )
+
+        below_completed, below_result = run_observed(1699)
+        self.assertEqual(below_completed.returncode, 0)
+        below = below_result["results"]["memory"]
+        # Independent oracle: exact rational comparison, not the production
+        # quotient/remainder implementation.
+        independent_boundary_oracle = 2000 * 85 // 100
+        independent_maximum_accepted_oracle = (2000 * 85 - 1) // 100
+        self.assertEqual(independent_boundary_oracle, 1700)
+        self.assertEqual(independent_maximum_accepted_oracle, 1699)
+        self.assertEqual(below["execution_limit"]["denominator"], "BASE_HBM_B")
+        self.assertEqual(below["execution_limit"]["comparison"], "STRICTLY_LESS_THAN_85_PERCENT")
+        self.assertEqual(
+            below["execution_limit"]["boundary_B"], independent_boundary_oracle
+        )
+        self.assertEqual(
+            below["execution_limit"]["maximum_accepted_B"],
+            independent_maximum_accepted_oracle,
+        )
+        self.assertEqual(below["a2_a3_execution_85_percent_gate"], "PASS")
+
+        for observed_peak in (1700, 1701):
+            with self.subTest(observed_peak=observed_peak):
+                completed, result = run_observed(observed_peak)
+                self.assertEqual(completed.returncode, 5)
+                self.assertEqual(result["status"], "INVALID_ACCURACY_EXECUTION")
+                self.assertEqual(
+                    result["reject_code"], "HBM_EXECUTION_LIMIT_REACHED"
+                )
+                memory = result["results"]["memory"]
+                self.assertEqual(
+                    memory["a2_a3_execution_85_percent_gate"],
+                    "INVALID_ACCURACY_EXECUTION",
+                )
+                self.assertEqual(memory["observed_execution_peak_B"], observed_peak)
+                self.assertEqual(result["readiness"]["hbm"], "BLOCKED")
+
+    def test_memory_materialization_requires_complete_bindings_and_conserved_peak(self):
+        component_values = {
+            "PARAMETERS": 200,
+            "GRADIENTS": 100,
+            "OPTIMIZER_STATES": 150,
+            "ACTIVATIONS": 200,
+            "COMMUNICATION_BUFFERS": 100,
+            "EXPERT_PLACEMENT": 100,
+            "RECOMPUTATION": 100,
+        }
+
+        def partial_binding(memory):
+            self.materialize_memory_plan(
+                memory,
+                base_hbm_B=2000,
+                reserve_hbm_B=1000,
+                component_values=component_values,
+            )
+            memory["spec"]["bindings"]["runtime"] = "UNBOUND"
+
+        def inconsistent_peak(memory):
+            self.materialize_memory_plan(
+                memory,
+                base_hbm_B=2000,
+                reserve_hbm_B=1000,
+                component_values=component_values,
+            )
+            memory["spec"]["capacity"]["plannedPeakHbmB"] = 949
+
+        for mutation, expected_code in (
+            (partial_binding, "TARGET_MEMORY_BINDINGS_INCOMPLETE"),
+            (inconsistent_peak, "TARGET_MEMORY_CAPACITY_MISMATCH"),
+        ):
+            with self.subTest(expected_code=expected_code):
+                completed, result = self.run_mutated_target_contract(
+                    mutate_memory=mutation
+                )
+
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(result["reject_code"], expected_code)
+                self.assertEqual(result["readiness"]["target_model"], "READY")
+                self.assertEqual(result["readiness"]["target_step"], "READY")
+
+    def test_memory_component_expression_and_dependencies_are_canonical(self):
+        def change_expression(memory):
+            memory["spec"]["components"][0]["expression"] = "checkpoint bytes"
+
+        def drop_dependency(memory):
+            memory["spec"]["components"][4]["requires"] = ["runtime"]
+
+        for mutation in (change_expression, drop_dependency):
+            with self.subTest(mutation=mutation.__name__):
+                completed, result = self.run_mutated_target_contract(
+                    mutate_memory=mutation
+                )
+
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(
+                    result["reject_code"], "TARGET_MEMORY_COMPONENTS_INVALID"
+                )
 
     def test_legacy_gpu_alltoallv_is_explicitly_unsupported(self):
         completed, result = self.run_generated_legacy_contract("ALLTOALLV")
