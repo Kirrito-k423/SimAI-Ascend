@@ -66,6 +66,84 @@ class AnalyticalRunContractTest(unittest.TestCase):
             result = json.loads(result_path.read_text()) if result_path.exists() else None
         return completed, result, manifest_path
 
+    def run_mutated_ascend_contract(
+        self, *, mutate_profile=None, mutate_model=None, mutate_raw=None
+    ):
+        """Run a content-addressed mutation through the public process seam."""
+        profile = json.loads(
+            (FIXTURES / "minimal_ascend_profile.json").read_text()
+        )
+        model = json.loads(
+            (FIXTURES / "minimal_hccl_allreduce_cost_model.json").read_text()
+        )
+        raw = json.loads(
+            (FIXTURES / "minimal_hccl_allreduce_observation.json").read_text()
+        )
+        manifest = json.loads(
+            (FIXTURES / "minimal_ascend_allreduce_run.json").read_text()
+        )
+
+        if mutate_profile is not None:
+            mutate_profile(profile)
+
+        with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:
+            run_directory = self.prepare_run_directory(temp_dir)
+            profile_path = run_directory / "profile.json"
+            profile_path.write_text(json.dumps(profile, indent=2) + "\n")
+            profile_digest = "sha256:" + hashlib.sha256(
+                profile_path.read_bytes()
+            ).hexdigest()
+
+            raw["spec"]["profileDigest"] = profile_digest
+            if mutate_raw is not None:
+                mutate_raw(raw)
+            raw_path = run_directory / "raw.json"
+            raw_path.write_text(json.dumps(raw, indent=2) + "\n")
+            raw_digest = "sha256:" + hashlib.sha256(raw_path.read_bytes()).hexdigest()
+
+            model["spec"]["profileDigest"] = profile_digest
+            model["spec"]["inputSamples"][0]["path"] = str(raw_path)
+            model["spec"]["inputSamples"][0]["sha256"] = raw_digest
+            if mutate_model is not None:
+                mutate_model(model)
+            model_path = run_directory / "model.json"
+            model_path.write_text(json.dumps(model, indent=2) + "\n")
+            model_digest = "sha256:" + hashlib.sha256(
+                model_path.read_bytes()
+            ).hexdigest()
+
+            manifest["workload"]["path"] = str(
+                FIXTURES / "ascend_allreduce_workload.txt"
+            )
+            manifest["device_profile"] = {
+                "path": str(profile_path),
+                "sha256": profile_digest,
+            }
+            manifest["collective_cost_model"] = {
+                "path": str(model_path),
+                "sha256": model_digest,
+            }
+            manifest_path = run_directory / "run.json"
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+            result_path = run_directory / "result.json"
+            completed = subprocess.run(
+                [
+                    str(self.binary),
+                    "--run-manifest",
+                    str(manifest_path),
+                    "--result-manifest",
+                    str(result_path),
+                ],
+                cwd=run_directory,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+            result = json.loads(result_path.read_text())
+        return completed, result
+
     def test_minimal_legacy_gpu_manifest_runs_real_analytical_process(self):
         completed, result, manifest_path = self.run_contract(
             "minimal_legacy_gpu_run.json"
@@ -234,6 +312,124 @@ class AnalyticalRunContractTest(unittest.TestCase):
         self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
         self.assertEqual(result["readiness"]["contract"], "BLOCKED")
         self.assertEqual(result["readiness"]["hccl_cost_model"], "BLOCKED")
+
+    def test_hccl_duration_outside_signed_rounding_range_fails_closed(self):
+        completed, result = self.run_mutated_ascend_contract(
+            mutate_model=lambda model: model["spec"]["fit"]["bandwidth"].update(
+                {"value": 0.0001}
+            )
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(result["reject_code"], "HCCL_COST_MODEL_NUMERIC_OVERFLOW")
+        self.assertEqual(result["readiness"]["contract"], "BLOCKED")
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+        self.assertEqual(result["results"]["traffic_B"], "UNKNOWN")
+
+    def test_profile_noncanonical_consumed_unit_is_rejected(self):
+        def use_noncanonical_compute_unit(profile):
+            profile["spec"]["compute"]["capabilities"][0]["peakFLOPsPerS"][
+                "unit"
+            ] = "TFLOP/s"
+
+        completed, result = self.run_mutated_ascend_contract(
+            mutate_profile=use_noncanonical_compute_unit
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(result["reject_code"], "DEVICE_PROFILE_UNIT_INVALID")
+        self.assertEqual(result["readiness"]["contract"], "BLOCKED")
+        self.assertEqual(result["readiness"]["ascend_profile"], "BLOCKED")
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+
+    def test_hccl_model_formula_change_is_rejected(self):
+        completed, result = self.run_mutated_ascend_contract(
+            mutate_model=lambda model: model["spec"]["fit"].update(
+                {"formula": "startup_ns + message_B"}
+            )
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(result["reject_code"], "HCCL_COST_MODEL_FORMULA_INVALID")
+        self.assertEqual(result["readiness"]["contract"], "BLOCKED")
+        self.assertEqual(result["readiness"]["hccl_cost_model"], "BLOCKED")
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+
+    def test_field_unverified_model_cannot_claim_measured_evidence(self):
+        completed, result = self.run_mutated_ascend_contract(
+            mutate_model=lambda model: model["spec"].update(
+                {"evidenceClass": "MEASURED"}
+            )
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(result["reject_code"], "EVIDENCE_READINESS_CONFLICT")
+        self.assertEqual(result["readiness"]["contract"], "BLOCKED")
+        self.assertEqual(result["readiness"]["hccl_cost_model"], "BLOCKED")
+        self.assertEqual(result["results"]["validity"], "UNKNOWN")
+
+    def test_consumed_profile_field_requires_resolved_evidence_and_readiness(self):
+        def remove_readiness(profile):
+            del profile["spec"]["identity"]["physicalChipCount"]["readiness"]
+
+        def use_unknown_readiness(profile):
+            profile["spec"]["identity"]["physicalChipCount"][
+                "readiness"
+            ] = "UNKNOWN"
+
+        def use_unresolved_evidence(profile):
+            profile["spec"]["identity"]["physicalChipCount"][
+                "evidenceRef"
+            ] = "missing-evidence"
+
+        for mutation in (
+            remove_readiness,
+            use_unknown_readiness,
+            use_unresolved_evidence,
+        ):
+            with self.subTest(mutation=mutation.__name__):
+                completed, result = self.run_mutated_ascend_contract(
+                    mutate_profile=mutation
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(result["status"], "INVALID_INPUT")
+                self.assertEqual(
+                    result["reject_code"],
+                    "DEVICE_PROFILE_FIELD_EVIDENCE_INVALID",
+                )
+                self.assertEqual(result["readiness"]["contract"], "BLOCKED")
+                self.assertEqual(
+                    result["readiness"]["ascend_profile"], "BLOCKED"
+                )
+                self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+
+    def test_raw_observation_must_match_model_and_normalized_bandwidth(self):
+        def change_observed_time(raw):
+            raw["spec"]["normalized"]["averageTime"]["value"] = 70000
+
+        def change_normalized_bandwidth(raw):
+            raw["spec"]["normalized"]["algBandwidth"]["value"] = 1
+
+        for mutation in (change_observed_time, change_normalized_bandwidth):
+            with self.subTest(mutation=mutation.__name__):
+                completed, result = self.run_mutated_ascend_contract(
+                    mutate_raw=mutation
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(result["status"], "INVALID_INPUT")
+                self.assertEqual(
+                    result["reject_code"],
+                    "RAW_OBSERVATION_MODEL_INCONSISTENT",
+                )
+                self.assertEqual(result["readiness"]["contract"], "BLOCKED")
+                self.assertEqual(
+                    result["readiness"]["hccl_cost_model"], "BLOCKED"
+                )
+                self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
 
     def test_minimal_gpu_workload_keeps_legacy_cli_compatible(self):
         with tempfile.TemporaryDirectory(prefix="simai-contract-") as temp_dir:

@@ -6,7 +6,7 @@
     "id": "synthetic-hccl-ar-alpha-beta-r4-host"
   },
   "spec": {
-    "profileDigest": "sha256:3749a4018f73ee88785ec87217412238c51c789ef42bcbbae09a076cb575bb9b",
+    "profileDigest": "sha256:78f97d9472b229f6a8dc835f41b7ac4e4554d1c5b0e89bde396484013f51f6ef",
     "collective": "ALL_REDUCE",
     "dtype": "BF16",
     "reduction": "SUM",
@@ -28,7 +28,7 @@
       {
         "id": "synthetic-hccl-ar-1mib-r4-host",
         "path": "tests/contract/fixtures/minimal_hccl_allreduce_observation.json",
-        "sha256": "sha256:f68c45dd1c7060c1da8591c26c9c5123576e567f9d611fbeb00626df56be65fe"
+        "sha256": "sha256:0abeb06593328bbabef9e7b5aa04008c0df6136c24256aaa262ecceedee12f58"
       }
     ],
     "fit": {

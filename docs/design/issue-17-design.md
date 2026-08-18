@@ -19,7 +19,7 @@
 
 ### 2.1 逻辑视图
 
-Shared Run Contract 仍是唯一产品验收边界。`RunContract` 在 backend 入口验证三层资源的 schema、摘要、规范单位和精确适用域，并只把已验证的 `HcclCostModelConfig` 交给生产 `HcclCostModel`。Profile 描述设备/拓扑事实或假设，RawObservation 保持不可变，DerivedCostModel 通过 RawObservation SHA-256 引用输入；重拟合必须产生新模型和新摘要，不能回写 raw。
+Shared Run Contract 仍是唯一产品验收边界。`RunContract` 在 backend 入口通过共享的内容寻址 artifact loader，以及 `ValidateAscendProfile`、`ValidateHcclCostModel`、`ValidateRawObservation` 三个 typed validator 验证 schema、摘要、规范单位和精确适用域；编排层只把完整验证后的 `HcclCostModelConfig` 交给生产 `HcclCostModel`。Profile 描述设备/拓扑事实或假设，RawObservation 保持不可变，DerivedCostModel 通过 RawObservation SHA-256 引用输入；重拟合必须产生新模型和新摘要，不能回写 raw。
 
 `CollectiveCostModel` 是 Upstream Analytical 流程中的可选 seam。`Sys` 保存非拥有指针及当前拓扑域；`Layer::compute_time()` 把原 workload 已有的 operation、message bytes、rank count、group type、TP/EP size 与 `Sys` 拓扑上下文组成请求。模型命中时直接返回 standalone HCCL duration，绝不再转成 bus bandwidth 或套 NVIDIA ring factor；未注入时才委托原 `cal_busbw` 路径。
 
@@ -36,7 +36,7 @@ Result Manifest 中两类状态分开：
 - `analytical/HcclCostModel.h/.cc`：#17 的严格单域 AllReduce `ALPHA_BETA` 模型和 ring traffic 记账。
 - `system/Sys.hh/.cc`：以末尾可选构造参数保存模型及拓扑上下文，保持所有旧调用点源码兼容。
 - `workload/Layer.cc`：把既有 workload 语义转换为 provider 请求；无 provider 时执行未改变的 legacy 分支。
-- `analytical/RunContract.h/.cc`：读取/验证三层 artifact，形成配置，输出 `simai.result/v1`。
+- `analytical/RunContract.h/.cc`：共享 loader 一次完成 reference/read/digest/JSON 闭包；三个 typed validator 分别拥有 Profile/model/raw 规则；短编排函数形成配置并输出 `simai.result/v1`。
 - `analytical/AnalyticalAstra.cc`：在 contract 入口组装模型、注入 `Sys`、运行真实引擎并按模型汇总决定进程状态。
 - `tests/contract/test_analytical_run_contract.py`：只观察真实进程退出状态和 Result Manifest。
 - `tests/contract/fixtures/`：公开、脱敏、合成的 4-rank HOST/TP 1 MiB worked example 与 fail-closed 输入。
@@ -54,8 +54,9 @@ flowchart TD
     F -- "缺 Profile" --> F1["INVALID_INPUT / ASCEND_PROFILE_REQUIRED"]
     F -- "缺模型" --> F2["UNSUPPORTED / HCCL_COST_MODEL_REQUIRED"]
     F -- "是" --> G["校验 Profile SHA/schema/units/evidence"]
-    G --> H["校验 DerivedCostModel SHA/精确 domain"]
-    H --> I["校验 RawObservation SHA/schema/correctness"]
+    G --> G1["逐字段解析 KNOWN/readiness/evidenceRef"]
+    G1 --> H["校验 DerivedCostModel SHA/精确 domain/数值范围"]
+    H --> I["校验 RawObservation SHA/schema/correctness/模型残差"]
     I --> J["构造 HcclCostModel 并注入 Sys"]
     J --> K["真实 Workload -> Layer::compute_time"]
     K --> L{"message/rank/group/topology 命中?"}
@@ -123,8 +124,18 @@ classDiagram
     class ResultManifestWriter {
       +write(contract, execution, model) bool
     }
+    class ArtifactLoader {
+      +load(reference, policy) LoadedArtifact
+    }
+    class TypedValidators {
+      +validateProfile(json) ValidatedAscendProfile
+      +validateModel(json, profile) ValidatedHcclCostModel
+      +validateRaw(json, profile, model) ValidatedRawObservation
+    }
 
     AnalyticalAstraMain --> AnalyticalRunContract : validates resources
+    AnalyticalRunContract --> ArtifactLoader
+    AnalyticalRunContract --> TypedValidators
     AnalyticalAstraMain --> HcclCostModel : owns for one process
     HcclCostModel ..|> CollectiveCostModel
     AnalyticalAstraMain --> Sys : injects optional model
@@ -171,9 +182,9 @@ DerivedCostModel 的 `inputSamples[]` 再以 path + SHA-256 引用一个不可�
 校验按以下顺序 fail closed：
 
 1. #16 Run schema、workload path/digest、backend 与 device selector 互斥；
-2. Profile artifact 可读、摘要匹配、API/kind/version/identity/topology/evidence 和规范单位合法；
-3. DerivedCostModel artifact 可读、摘要匹配、只声明 `ALL_REDUCE + BF16 + SUM + DEVICE_ONLY + ALPHA_BETA + RING`，精确 rank/group/scope/topology/message domain，且 `extrapolation.allowed=false`；
-4. RawObservation artifact 可读、摘要匹配、Profile/domain 一致、canonical bytes 语义、normalized ns/B/s、correctness PASS、eligibility fit；
+2. Profile artifact 可读、摘要匹配、API/kind/version/identity/topology/evidence 和规范单位合法；每个被消费的 count/FLOP/s/B/B/s 值必须是 `KNOWN`，带非 UNKNOWN readiness，且 `evidenceRef` 能解析到完整 evidence record；拓扑 rank/domain 也受相同 reference/readiness gate；
+3. DerivedCostModel artifact 可读、摘要匹配、只声明 `ALL_REDUCE + BF16 + SUM + DEVICE_ONLY + ALPHA_BETA + RING`，精确 rank/group/scope/topology/message domain，且 `extrapolation.allowed=false`；最大域消息的预测 duration 必须有限且不超过 `LLONG_MAX`，以匹配 `llround` 的返回域；
+4. RawObservation artifact 可读、摘要匹配、Profile/domain 一致、canonical bytes 语义、normalized ns/B/s、correctness PASS、eligibility fit；固定样本的模型预测与 raw timing 残差最多 `1 ns`，`bytes / time` 推导带宽与 normalized `algBandwidth` 的相对残差最多 `10 ppm`；
 5. `FIELD_UNVERIFIED` 资源不得包含 `MEASURED` 声明；
 6. 构造 provider 并注入真实 `Sys`；
 7. `Layer::compute_time()` 的真实 workload 请求再次执行运行时 domain gate。
@@ -204,6 +215,10 @@ AllReduce ring 的 `traffic_B` 是整个 group 的算法展开总字节：
 ```
 
 `message_bytes_per_rank` 的语义是 HCCL API 输入 buffer 的逻辑字节，发生在算法展开前。`traffic_B` 不是物理链路 line rate，也不是 HCCL native `alg_bandwidth`。
+
+实现使用 `llround`，因此 provider 和入口 typed validator 都以 `2^63` 为严格上界（`duration_ns < 2^63`），而不是按 `UINT64_MAX` 限界。超界模型稳定返回 `INVALID_INPUT/HCCL_COST_MODEL_NUMERIC_OVERFLOW`，不允许未定义/实现相关的有符号舍入结果被转换成受支持的 `uint64_t` timing。
+
+固定单样本模型的可追溯性不是只靠摘要闭包：validator 还核对 `abs(raw_time - round(model_prediction)) <= 1 ns`，并核对 `abs(raw_alg_bw - bytes/time)/(bytes/time) <= 10 ppm`。该容差只吸收整数纳秒归一化误差，不是插值或外推许可。
 
 ### 4.4 输出与 UNKNOWN/BLOCKED 传播
 
@@ -241,7 +256,7 @@ AllReduce ring 的 `traffic_B` 是整个 group 的算法展开总字节：
 
 | 层 | API | 可变性 | #17 消费字段 |
 | --- | --- | --- | --- |
-| Profile | `simai.ascend.profile/v1alpha1` | 新事实产生新 artifact/digest | Ascend identity、rank count、HOST topology、B/B/s/FLOP/s 数值、evidence/readiness |
+| Profile | `simai.ascend.profile/v1alpha1` | 新事实产生新 artifact/digest | Ascend identity、rank count、HOST topology、B/B/s/FLOP/s 数值；每个消费字段的 KNOWN/readiness/resolved evidenceRef |
 | RawObservation | `simai.ascend.observation/v1alpha1` | 不可变；模型只能按 SHA 引用 | AR、API input B、rank/group/scope/topology、normalized ns/B/s、correctness/fit |
 | DerivedCostModel | `simai.ascend.costmodel/v1alpha1` | 重拟合产生新 artifact/digest | exact domain、alpha/beta、ring traffic、raw/profile digests、DERIVED/FIELD_UNVERIFIED |
 
@@ -262,14 +277,14 @@ AllReduce ring 的 `traffic_B` 是整个 group 的算法展开总字节：
 
 | Issue #17 验收项 | 进程边界证据 |
 | --- | --- |
-| 1. Profile/raw/model 分层与规范单位 | 有效 fixture 的三个独立 SHA 出现在 provenance；入口 schema/units/domain validator；结果 evidence 分层 |
+| 1. Profile/raw/model 分层与规范单位 | 有效 fixture 的三个独立 SHA 出现在 provenance；非规范单位稳定拒绝；消费字段缺 readiness、UNKNOWN readiness、悬空 evidenceRef 均 fail closed |
 | 2. 按 bytes/rank/group/topology 注入 | 有效结果 `collective` 为 1 MiB/4/TP/HOST；worked example 独立期望 `61943 ns`；2 MiB 真实 workload 产生 domain miss |
 | 3. 真实进程输出 VALID/timing/traffic/provenance | `test_minimal_ascend_allreduce_uses_profiled_hccl_cost`：exit 0、VALID、61943 ns、6291456 B、三层 digest |
 | 4. 缺 Profile/模型绝不 GPU/NCCL fallback | `test_hccl_model_without_ascend_profile_fails_closed` 与 `test_ascend_profile_without_hccl_model_is_unsupported`；timing/traffic UNKNOWN |
-| 5. evidence/readiness 分离，FIELD_UNVERIFIED 不得 MEASURED | 有效结果逐层断言 USER_INPUT/DERIVED + FIELD_UNVERIFIED，整个 evidence 序列化中无 MEASURED；execution readiness 独立为 READY |
+| 5. evidence/readiness 分离，FIELD_UNVERIFIED 不得 MEASURED | 有效结果逐层断言 USER_INPUT/DERIVED + FIELD_UNVERIFIED；模型 MEASURED 冲突稳定拒绝；execution readiness 独立为 READY |
 | 6. #16 legacy GPU 回归 | 原 8 项完整保留并随新增 4 项一起运行 |
 
-Independent verification 使用固定 fixture 运行一个有效 AllReduce 和缺 Profile 负例；前者只从 Result Manifest 检查 timing/traffic/provenance，后者检查 exit 2、`ASCEND_PROFILE_REQUIRED` 和 UNKNOWN 定量结果。完整 suite 还覆盖缺模型与运行时超域。
+Independent verification 使用固定 fixture 运行一个有效 AllReduce 和缺 Profile 负例；前者只从 Result Manifest 检查 timing/traffic/provenance，后者检查 exit 2、`ASCEND_PROFILE_REQUIRED` 和 UNKNOWN 定量结果。完整 18 项 suite 包含 #16 的 8 项回归和 #17 的 10 项行为，还覆盖缺模型、运行时超域、非法单位/公式/evidence、数值溢出、逐字段 evidence gate，以及重摘要后的 raw timing/bandwidth 篡改。
 
 ## 8. 限制与后续依赖
 

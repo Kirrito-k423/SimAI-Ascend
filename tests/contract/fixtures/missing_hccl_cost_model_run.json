@@ -8,6 +8,6 @@
   },
   "device_profile": {
     "path": "tests/contract/fixtures/minimal_ascend_profile.json",
-    "sha256": "sha256:3749a4018f73ee88785ec87217412238c51c789ef42bcbbae09a076cb575bb9b"
+    "sha256": "sha256:78f97d9472b229f6a8dc835f41b7ac4e4554d1c5b0e89bde396484013f51f6ef"
   }
 }

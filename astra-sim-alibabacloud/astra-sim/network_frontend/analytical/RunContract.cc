@@ -684,6 +684,72 @@ bool EvidenceRecordIsComplete(const JsonValue& evidence) {
   return true;
 }
 
+bool BuildEvidenceClassIndex(
+    const JsonValue& spec,
+    std::map<std::string, std::string>* evidence_classes) {
+  const JsonValue* records = Member(spec, "evidence");
+  if (records == nullptr || records->type != JsonValue::Type::Array ||
+      records->array.empty()) {
+    return false;
+  }
+  for (const JsonValue& record : records->array) {
+    std::string id;
+    std::string evidence_class;
+    if (!EvidenceRecordIsComplete(record) ||
+        !StringMember(record, "id", &id) ||
+        !StringMember(record, "class", &evidence_class) ||
+        evidence_classes->count(id) != 0U) {
+      return false;
+    }
+    (*evidence_classes)[id] = evidence_class;
+  }
+  return true;
+}
+
+bool ConsumedFieldEvidenceIsValid(
+    const JsonValue& field,
+    const std::map<std::string, std::string>& evidence_classes,
+    bool* has_unverified_field) {
+  std::string status;
+  std::string evidence_ref;
+  std::string readiness;
+  if (!StringMember(field, "status", &status) || status != "KNOWN" ||
+      !StringMember(field, "evidenceRef", &evidence_ref) ||
+      !StringMember(field, "readiness", &readiness) ||
+      (readiness != "FIELD_UNVERIFIED" && readiness != "FIELD_VERIFIED")) {
+    return false;
+  }
+  const auto evidence = evidence_classes.find(evidence_ref);
+  if (evidence == evidence_classes.end() ||
+      (readiness == "FIELD_UNVERIFIED" && evidence->second == "MEASURED")) {
+    return false;
+  }
+  *has_unverified_field =
+      *has_unverified_field || readiness == "FIELD_UNVERIFIED";
+  return true;
+}
+
+bool ConsumedTopologyEvidenceIsValid(
+    const JsonValue& topology_level,
+    const std::map<std::string, std::string>& evidence_classes,
+    bool* has_unverified_field) {
+  std::string evidence_ref;
+  std::string readiness;
+  if (!StringMember(topology_level, "evidenceRef", &evidence_ref) ||
+      !StringMember(topology_level, "readiness", &readiness) ||
+      (readiness != "FIELD_UNVERIFIED" && readiness != "FIELD_VERIFIED")) {
+    return false;
+  }
+  const auto evidence = evidence_classes.find(evidence_ref);
+  if (evidence == evidence_classes.end() ||
+      (readiness == "FIELD_UNVERIFIED" && evidence->second == "MEASURED")) {
+    return false;
+  }
+  *has_unverified_field =
+      *has_unverified_field || readiness == "FIELD_UNVERIFIED";
+  return true;
+}
+
 bool PositiveIntMember(
     const JsonValue& object,
     const std::string& key,
@@ -773,146 +839,601 @@ void RejectUnsupported(
   contract->remediation = remediation;
 }
 
-bool LoadAscendResources(
-    const JsonValue& root,
-    const JsonValue& profile_reference,
-    AnalyticalRunContract* contract) {
-  std::string profile_path;
-  std::string declared_profile_digest;
-  if (!ParseArtifactReference(
-          profile_reference, &profile_path, &declared_profile_digest)) {
+struct ArtifactLoadPolicy {
+  const char* reference_code;
+  const char* reference_message;
+  const char* reference_remediation;
+  const char* not_found_code;
+  const char* not_found_message;
+  const char* not_found_remediation;
+  const char* digest_code;
+  const char* digest_message;
+  const char* digest_remediation;
+  const char* json_code;
+  const char* json_message;
+  const char* json_remediation;
+};
+
+struct LoadedArtifact {
+  JsonValue document;
+  std::string sha256;
+};
+
+bool LoadArtifact(
+    const JsonValue& reference,
+    const ArtifactLoadPolicy& policy,
+    AnalyticalRunContract* contract,
+    LoadedArtifact* artifact) {
+  std::string path;
+  std::string declared_digest;
+  if (!ParseArtifactReference(reference, &path, &declared_digest)) {
     Reject(
         contract,
-        "DEVICE_PROFILE_REFERENCE_INVALID",
-        "The Ascend Profile reference is invalid.",
-        "Provide device_profile.path and its SHA-256 digest.");
+        policy.reference_code,
+        policy.reference_message,
+        policy.reference_remediation);
     return false;
   }
-  std::string profile_content;
-  if (!ReadFile(profile_path, &profile_content)) {
+  std::string content;
+  if (!ReadFile(path, &content)) {
     Reject(
         contract,
-        "DEVICE_PROFILE_NOT_FOUND",
-        "The Ascend Profile could not be read.",
-        "Provide a readable public Ascend Profile artifact.");
+        policy.not_found_code,
+        policy.not_found_message,
+        policy.not_found_remediation);
     return false;
   }
-  contract->device_profile_sha256 = "sha256:" + Sha256Hex(profile_content);
-  if (contract->device_profile_sha256 != declared_profile_digest) {
+  artifact->sha256 = "sha256:" + Sha256Hex(content);
+  if (artifact->sha256 != declared_digest) {
     Reject(
         contract,
-        "DEVICE_PROFILE_DIGEST_MISMATCH",
-        "The Ascend Profile does not match its declared digest.",
-        "Use the intended immutable Profile or update its digest.");
+        policy.digest_code,
+        policy.digest_message,
+        policy.digest_remediation);
     return false;
   }
-  JsonValue profile;
-  if (!ParseJsonDocument(profile_content, &profile)) {
+  if (!ParseJsonDocument(content, &artifact->document)) {
     Reject(
         contract,
-        "DEVICE_PROFILE_INVALID_JSON",
-        "The Ascend Profile is not valid JSON.",
-        "Correct the Profile JSON and retry.");
+        policy.json_code,
+        policy.json_message,
+        policy.json_remediation);
+    return false;
+  }
+  return true;
+}
+
+struct ValidatedAscendProfile {
+  std::string id;
+  int rank_count = 0;
+  std::string topology_domain;
+  std::string topology_digest;
+  std::string evidence_level;
+  std::string field_readiness;
+};
+
+bool ValidateAscendProfile(
+    const JsonValue& profile,
+    AnalyticalRunContract* contract,
+    ValidatedAscendProfile* validated) {
+  if (!UnitsAreCanonical(profile)) {
+    Reject(
+        contract,
+        "DEVICE_PROFILE_UNIT_INVALID",
+        "The Ascend Profile contains a noncanonical unit.",
+        "Use only B, B/s, FLOP/s, ns, or count for consumed values.");
     return false;
   }
 
   std::string api_version;
   std::string kind;
   std::string schema_semver;
-  const JsonValue* profile_metadata = Member(profile, "metadata");
-  const JsonValue* profile_spec = Member(profile, "spec");
+  const JsonValue* metadata = Member(profile, "metadata");
+  const JsonValue* spec = Member(profile, "spec");
   const JsonValue* identity =
-      profile_spec == nullptr ? nullptr : Member(*profile_spec, "identity");
+      spec == nullptr ? nullptr : Member(*spec, "identity");
   const JsonValue* physical_chip_count =
       identity == nullptr ? nullptr : Member(*identity, "physicalChipCount");
   const JsonValue* management_device_count =
       identity == nullptr ? nullptr : Member(*identity, "managementDeviceCount");
-  const JsonValue* rank_granularity = profile_spec == nullptr
-      ? nullptr
-      : Member(*profile_spec, "rankGranularity");
+  const JsonValue* rank_granularity =
+      spec == nullptr ? nullptr : Member(*spec, "rankGranularity");
   const JsonValue* ranks_per_unit = rank_granularity == nullptr
       ? nullptr
       : Member(*rank_granularity, "trainingRanksPerUnit");
+  const JsonValue* compute =
+      spec == nullptr ? nullptr : Member(*spec, "compute");
+  const JsonValue* compute_capability =
+      compute == nullptr ? nullptr : FirstArrayObject(*compute, "capabilities");
+  const JsonValue* peak_flops = compute_capability == nullptr
+      ? nullptr
+      : Member(*compute_capability, "peakFLOPsPerS");
+  const JsonValue* memory =
+      spec == nullptr ? nullptr : Member(*spec, "memory");
+  const JsonValue* hbm = memory == nullptr ? nullptr : Member(*memory, "hbm");
+  const JsonValue* hbm_capacity =
+      hbm == nullptr ? nullptr : Member(*hbm, "installedCapacity");
+  const JsonValue* hbm_bandwidth =
+      hbm == nullptr ? nullptr : FirstArrayObject(*hbm, "bandwidth");
   const JsonValue* topology =
-      profile_spec == nullptr ? nullptr : Member(*profile_spec, "topology");
+      spec == nullptr ? nullptr : Member(*spec, "topology");
   const JsonValue* topology_level =
       topology == nullptr ? nullptr : FirstArrayObject(*topology, "levels");
-  const JsonValue* profile_evidence =
-      profile_spec == nullptr ? nullptr : FirstArrayObject(*profile_spec, "evidence");
-  std::string profile_id;
-  std::string profile_status;
+  const JsonValue* first_evidence =
+      spec == nullptr ? nullptr : FirstArrayObject(*spec, "evidence");
+
+  std::string status;
   std::string vendor;
   std::string generation;
   std::string rank_unit;
-  std::string physical_count_unit;
-  std::string management_count_unit;
+  std::string physical_unit;
+  std::string management_unit;
   std::string ranks_per_unit_unit;
-  std::string topology_domain;
-  std::string topology_digest;
-  std::string profile_evidence_level;
+  std::string peak_flops_unit;
+  std::string hbm_capacity_unit;
+  std::string hbm_bandwidth_unit;
   uint64_t physical_count = 0;
   uint64_t management_count = 0;
   uint64_t ranks_per_unit_count = 0;
-  int profile_rank_count = 0;
+  uint64_t peak_flops_per_s = 0;
+  uint64_t hbm_capacity_bytes = 0;
+  double hbm_bandwidth_Bps = 0.0;
   if (!StringMember(profile, "apiVersion", &api_version) ||
       api_version != "simai.ascend.profile/v1alpha1" ||
       !StringMember(profile, "kind", &kind) ||
       kind != "AscendHardwareProfile" ||
       !StringMember(profile, "schemaSemver", &schema_semver) ||
-      schema_semver != "0.1.0" || profile_metadata == nullptr ||
-      !StringMember(*profile_metadata, "id", &profile_id) ||
-      profile_id.empty() || profile_spec == nullptr ||
-      !StringMember(*profile_spec, "status", &profile_status) ||
-      profile_status != "READY_FOR_ANALYTICAL" || identity == nullptr ||
+      schema_semver != "0.1.0" || metadata == nullptr ||
+      !StringMember(*metadata, "id", &validated->id) ||
+      validated->id.empty() || spec == nullptr ||
+      !StringMember(*spec, "status", &status) ||
+      status != "READY_FOR_ANALYTICAL" || identity == nullptr ||
       !StringMember(*identity, "vendor", &vendor) ||
       vendor != "HUAWEI_ASCEND" ||
       !StringMember(*identity, "generation", &generation) ||
       (generation != "A2" && generation != "A3" && generation != "A5") ||
       physical_chip_count == nullptr ||
       !PositiveUint64Member(*physical_chip_count, "value", &physical_count) ||
-      !StringMember(*physical_chip_count, "unit", &physical_count_unit) ||
-      physical_count_unit != "count" || management_device_count == nullptr ||
+      !StringMember(*physical_chip_count, "unit", &physical_unit) ||
+      physical_unit != "count" || management_device_count == nullptr ||
       !PositiveUint64Member(
           *management_device_count, "value", &management_count) ||
-      !StringMember(
-          *management_device_count, "unit", &management_count_unit) ||
-      management_count_unit != "count" || rank_granularity == nullptr ||
-      !StringMember(
-          *rank_granularity, "trainingRankUnit", &rank_unit) ||
+      !StringMember(*management_device_count, "unit", &management_unit) ||
+      management_unit != "count" || rank_granularity == nullptr ||
+      !StringMember(*rank_granularity, "trainingRankUnit", &rank_unit) ||
       (rank_unit != "CHIP" && rank_unit != "MANAGEMENT_DEVICE" &&
        rank_unit != "PACKAGE") || ranks_per_unit == nullptr ||
       !PositiveUint64Member(
           *ranks_per_unit, "value", &ranks_per_unit_count) ||
       !StringMember(*ranks_per_unit, "unit", &ranks_per_unit_unit) ||
-      ranks_per_unit_unit != "count" || topology_level == nullptr ||
-      !StringMember(*topology_level, "scope", &topology_domain) ||
-      !PositiveIntMember(*topology_level, "rankCount", &profile_rank_count) ||
-      physical_count != static_cast<uint64_t>(profile_rank_count) ||
+      ranks_per_unit_unit != "count" || peak_flops == nullptr ||
+      !PositiveUint64Member(*peak_flops, "value", &peak_flops_per_s) ||
+      !StringMember(*peak_flops, "unit", &peak_flops_unit) ||
+      peak_flops_unit != "FLOP/s" || hbm_capacity == nullptr ||
+      !PositiveUint64Member(
+          *hbm_capacity, "value", &hbm_capacity_bytes) ||
+      !StringMember(*hbm_capacity, "unit", &hbm_capacity_unit) ||
+      hbm_capacity_unit != "B" || hbm_bandwidth == nullptr ||
+      !NumberMember(*hbm_bandwidth, "value", &hbm_bandwidth_Bps) ||
+      hbm_bandwidth_Bps <= 0.0 ||
+      !StringMember(*hbm_bandwidth, "unit", &hbm_bandwidth_unit) ||
+      hbm_bandwidth_unit != "B/s" || topology_level == nullptr ||
+      !StringMember(
+          *topology_level, "scope", &validated->topology_domain) ||
+      !PositiveIntMember(
+          *topology_level, "rankCount", &validated->rank_count) ||
+      physical_count != static_cast<uint64_t>(validated->rank_count) ||
       management_count < 1U || ranks_per_unit_count < 1U ||
-      !StringMember(*topology_level, "topologyDigest", &topology_digest) ||
-      !IsSha256Identifier(topology_digest) || profile_evidence == nullptr ||
-      !StringMember(*profile_evidence, "class", &profile_evidence_level) ||
-      !EvidenceRecordIsComplete(*profile_evidence) ||
-      !UnitsAreCanonical(profile)) {
+      !StringMember(
+          *topology_level,
+          "topologyDigest",
+          &validated->topology_digest) ||
+      !IsSha256Identifier(validated->topology_digest) ||
+      first_evidence == nullptr ||
+      !StringMember(
+          *first_evidence, "class", &validated->evidence_level) ||
+      !EvidenceRecordIsComplete(*first_evidence)) {
     Reject(
         contract,
         "DEVICE_PROFILE_SCHEMA_INVALID",
         "The Ascend Profile schema or canonical units are invalid.",
-        "Use simai.ascend.profile/v1alpha1 with B, B/s, FLOP/s, ns, or count.");
+        "Use simai.ascend.profile/v1alpha1 with complete typed fields.");
     return false;
   }
-  const std::string profile_field_readiness =
-      ContainsString(profile, "FIELD_UNVERIFIED")
-          ? "FIELD_UNVERIFIED"
-          : (ContainsString(profile, "FIELD_VERIFIED") ? "FIELD_VERIFIED"
-                                                        : "UNKNOWN");
-  if (profile_field_readiness == "FIELD_UNVERIFIED" &&
-      ContainsString(profile, "MEASURED")) {
+
+  std::map<std::string, std::string> evidence_classes;
+  bool has_unverified_field = false;
+  if (!BuildEvidenceClassIndex(*spec, &evidence_classes) ||
+      !ConsumedFieldEvidenceIsValid(
+          *physical_chip_count, evidence_classes, &has_unverified_field) ||
+      !ConsumedFieldEvidenceIsValid(
+          *management_device_count, evidence_classes, &has_unverified_field) ||
+      !ConsumedFieldEvidenceIsValid(
+          *ranks_per_unit, evidence_classes, &has_unverified_field) ||
+      !ConsumedFieldEvidenceIsValid(
+          *peak_flops, evidence_classes, &has_unverified_field) ||
+      !ConsumedFieldEvidenceIsValid(
+          *hbm_capacity, evidence_classes, &has_unverified_field) ||
+      !ConsumedFieldEvidenceIsValid(
+          *hbm_bandwidth, evidence_classes, &has_unverified_field) ||
+      !ConsumedTopologyEvidenceIsValid(
+          *topology_level, evidence_classes, &has_unverified_field)) {
+    Reject(
+        contract,
+        "DEVICE_PROFILE_FIELD_EVIDENCE_INVALID",
+        "A consumed Profile field lacks resolved evidence or readiness.",
+        "Use KNOWN values with valid readiness and a resolved evidenceRef.");
+    return false;
+  }
+  validated->field_readiness =
+      has_unverified_field ? "FIELD_UNVERIFIED" : "FIELD_VERIFIED";
+  return true;
+}
+
+struct ValidatedHcclCostModel {
+  HcclCostModelConfig config;
+  JsonValue raw_reference;
+  std::string input_sample_id;
+  std::string collective;
+  std::string dtype;
+  std::string reduction;
+  std::string evidence_level;
+  std::string field_readiness;
+};
+
+bool ValidateHcclCostModel(
+    const JsonValue& model,
+    const std::string& profile_digest,
+    const ValidatedAscendProfile& profile,
+    AnalyticalRunContract* contract,
+    ValidatedHcclCostModel* validated) {
+  std::string api_version;
+  std::string kind;
+  std::string schema_semver;
+  const JsonValue* metadata = Member(model, "metadata");
+  const JsonValue* spec = Member(model, "spec");
+  const JsonValue* group_domain =
+      spec == nullptr ? nullptr : Member(*spec, "groupDomain");
+  const JsonValue* message_domain =
+      spec == nullptr ? nullptr : Member(*spec, "messageDomainBytes");
+  const JsonValue* fit = spec == nullptr ? nullptr : Member(*spec, "fit");
+  const JsonValue* startup = fit == nullptr ? nullptr : Member(*fit, "startup");
+  const JsonValue* bandwidth =
+      fit == nullptr ? nullptr : Member(*fit, "bandwidth");
+  const JsonValue* input_sample =
+      spec == nullptr ? nullptr : FirstArrayObject(*spec, "inputSamples");
+  const JsonValue* input_samples =
+      spec == nullptr ? nullptr : Member(*spec, "inputSamples");
+  const JsonValue* extrapolation =
+      spec == nullptr ? nullptr : Member(*spec, "extrapolation");
+  const JsonValue* traffic =
+      spec == nullptr ? nullptr : Member(*spec, "traffic");
+
+  std::string model_profile_digest;
+  std::string timing_scope;
+  std::string group_type;
+  std::string model_topology_domain;
+  std::string model_topology_digest;
+  std::string message_unit;
+  std::string family;
+  std::string formula;
+  std::string interpolation;
+  std::string startup_unit;
+  std::string bandwidth_unit;
+  std::string traffic_algorithm;
+  std::string traffic_semantics;
+  int rank_count = 0;
+  bool extrapolation_allowed = true;
+  const std::string supported_formula =
+      "round(startup_ns + message_B / bandwidth_Bps * 1000000000)";
+  if (fit != nullptr &&
+      (!StringMember(*fit, "formula", &formula) ||
+       formula != supported_formula)) {
+    Reject(
+        contract,
+        "HCCL_COST_MODEL_FORMULA_INVALID",
+        "The HCCL cost model formula is missing or unsupported.",
+        "Use the exact documented ALPHA_BETA nanosecond formula.");
+    return false;
+  }
+  std::string declared_readiness;
+  if (spec != nullptr &&
+      StringMember(*spec, "readiness", &declared_readiness) &&
+      declared_readiness == "FIELD_UNVERIFIED" &&
+      ContainsString(model, "MEASURED")) {
     Reject(
         contract,
         "EVIDENCE_READINESS_CONFLICT",
-        "FIELD_UNVERIFIED Profile values cannot be reported as MEASURED.",
-        "Use USER_INPUT, VENDOR_SPEC, DERIVED, or verify the target field.");
+        "A FIELD_UNVERIFIED cost model cannot claim MEASURED evidence.",
+        "Use DERIVED evidence or verify every consumed model field.");
+    return false;
+  }
+  if (!StringMember(model, "apiVersion", &api_version) ||
+      api_version != "simai.ascend.costmodel/v1alpha1" ||
+      !StringMember(model, "kind", &kind) || kind != "HcclCostModel" ||
+      !StringMember(model, "schemaSemver", &schema_semver) ||
+      schema_semver != "0.1.0" || metadata == nullptr ||
+      !StringMember(*metadata, "id", &validated->config.model_id) ||
+      validated->config.model_id.empty() || spec == nullptr ||
+      !StringMember(*spec, "profileDigest", &model_profile_digest) ||
+      model_profile_digest != profile_digest ||
+      !StringMember(*spec, "collective", &validated->collective) ||
+      validated->collective != "ALL_REDUCE" || group_domain == nullptr ||
+      !StringMember(*spec, "dtype", &validated->dtype) ||
+      validated->dtype != "BF16" ||
+      !StringMember(*spec, "reduction", &validated->reduction) ||
+      validated->reduction != "SUM" ||
+      !StringMember(*spec, "timingScope", &timing_scope) ||
+      timing_scope != "DEVICE_ONLY" ||
+      !FirstArrayPositiveInt(*group_domain, "rankCounts", &rank_count) ||
+      !FirstArrayString(*group_domain, "groupTypes", &group_type) ||
+      !FirstArrayString(
+          *group_domain, "scopes", &model_topology_domain) ||
+      !FirstArrayString(
+          *group_domain, "topologyDigests", &model_topology_digest) ||
+      rank_count != profile.rank_count ||
+      model_topology_domain != profile.topology_domain ||
+      model_topology_digest != profile.topology_digest ||
+      message_domain == nullptr ||
+      !PositiveUint64Member(
+          *message_domain,
+          "min",
+          &validated->config.minimum_message_bytes) ||
+      !PositiveUint64Member(
+          *message_domain,
+          "max",
+          &validated->config.maximum_message_bytes) ||
+      validated->config.minimum_message_bytes >
+          validated->config.maximum_message_bytes ||
+      !StringMember(*message_domain, "unit", &message_unit) ||
+      message_unit != "B" || fit == nullptr ||
+      !StringMember(*fit, "family", &family) || family != "ALPHA_BETA" ||
+      !StringMember(*fit, "interpolation", &interpolation) ||
+      interpolation != "NONE" || startup == nullptr ||
+      !PositiveUint64Member(
+          *startup, "value", &validated->config.startup_ns) ||
+      !StringMember(*startup, "unit", &startup_unit) ||
+      startup_unit != "ns" || bandwidth == nullptr ||
+      !NumberMember(
+          *bandwidth, "value", &validated->config.bandwidth_Bps) ||
+      validated->config.bandwidth_Bps <= 0.0 ||
+      !StringMember(*bandwidth, "unit", &bandwidth_unit) ||
+      bandwidth_unit != "B/s" || input_sample == nullptr ||
+      input_samples == nullptr ||
+      input_samples->type != JsonValue::Type::Array ||
+      input_samples->array.size() != 1U ||
+      !StringMember(
+          *input_sample, "id", &validated->input_sample_id) ||
+      validated->input_sample_id.empty() || traffic == nullptr ||
+      !StringMember(*traffic, "algorithm", &traffic_algorithm) ||
+      traffic_algorithm != "RING" ||
+      !StringMember(*traffic, "semantics", &traffic_semantics) ||
+      traffic_semantics != "ALGORITHM_TOTAL_GROUP_BYTES" ||
+      !StringMember(*spec, "evidenceClass", &validated->evidence_level) ||
+      validated->evidence_level != "DERIVED" ||
+      !StringMember(*spec, "readiness", &validated->field_readiness) ||
+      validated->field_readiness != "FIELD_UNVERIFIED" ||
+      extrapolation == nullptr ||
+      !BooleanMember(
+          *extrapolation, "allowed", &extrapolation_allowed) ||
+      extrapolation_allowed || !UnitsAreCanonical(model) ||
+      ContainsString(model, "MEASURED")) {
+    Reject(
+        contract,
+        "HCCL_COST_MODEL_SCHEMA_INVALID",
+        "The HCCL DerivedCostModel or its domain is invalid.",
+        "Provide a non-extrapolating AllReduce model matching the Profile.");
+    return false;
+  }
+
+  const double llround_upper_exclusive = std::ldexp(
+      1.0, std::numeric_limits<long long>::digits);
+  const double maximum_duration_ns =
+      static_cast<double>(validated->config.startup_ns) +
+      static_cast<double>(validated->config.maximum_message_bytes) *
+          1000000000.0 / validated->config.bandwidth_Bps;
+  if (!std::isfinite(maximum_duration_ns) ||
+      maximum_duration_ns >= llround_upper_exclusive) {
+    Reject(
+        contract,
+        "HCCL_COST_MODEL_NUMERIC_OVERFLOW",
+        "The HCCL model duration exceeds the supported rounding range.",
+        "Use finite model parameters whose duration is below 2^63 ns.");
+    return false;
+  }
+
+  if (group_type == "TP") {
+    validated->config.group_type = AstraSim::CostedGroupType::TP;
+  } else if (group_type == "DP") {
+    validated->config.group_type = AstraSim::CostedGroupType::DP;
+  } else if (group_type == "EP") {
+    validated->config.group_type = AstraSim::CostedGroupType::EP;
+  } else if (group_type == "DP_EP") {
+    validated->config.group_type = AstraSim::CostedGroupType::DP_EP;
+  } else {
+    Reject(
+        contract,
+        "HCCL_COST_MODEL_SCHEMA_INVALID",
+        "The HCCL group type is unsupported.",
+        "Use TP, DP, EP, or DP_EP.");
+    return false;
+  }
+  validated->config.collective = AstraSim::CostedCollective::AllReduce;
+  validated->config.rank_count = rank_count;
+  validated->config.topology_domain = profile.topology_domain;
+  validated->config.topology_digest = profile.topology_digest;
+  validated->raw_reference = *input_sample;
+  return true;
+}
+
+struct ValidatedRawObservation {
+  std::string evidence_level;
+  std::string field_readiness;
+};
+
+bool ValidateRawObservation(
+    const JsonValue& raw,
+    const std::string& profile_digest,
+    const ValidatedAscendProfile& profile,
+    const ValidatedHcclCostModel& model,
+    AnalyticalRunContract* contract,
+    ValidatedRawObservation* validated) {
+  std::string api_version;
+  std::string kind;
+  std::string schema_semver;
+  const JsonValue* spec = Member(raw, "spec");
+  const JsonValue* metadata = Member(raw, "metadata");
+  const JsonValue* group =
+      spec == nullptr ? nullptr : Member(*spec, "group");
+  const JsonValue* payload =
+      spec == nullptr ? nullptr : Member(*spec, "payload");
+  const JsonValue* bytes_per_rank =
+      payload == nullptr ? nullptr : Member(*payload, "bytesPerRank");
+  const JsonValue* normalized =
+      spec == nullptr ? nullptr : Member(*spec, "normalized");
+  const JsonValue* average_time =
+      normalized == nullptr ? nullptr : Member(*normalized, "averageTime");
+  const JsonValue* alg_bandwidth =
+      normalized == nullptr ? nullptr : Member(*normalized, "algBandwidth");
+  const JsonValue* first_evidence =
+      spec == nullptr ? nullptr : FirstArrayObject(*spec, "evidence");
+  const JsonValue* correctness =
+      spec == nullptr ? nullptr : Member(*spec, "correctness");
+  const JsonValue* eligibility =
+      spec == nullptr ? nullptr : Member(*spec, "eligibility");
+
+  std::string profile_ref;
+  std::string raw_id;
+  std::string raw_profile_digest;
+  std::string collective;
+  std::string scope;
+  std::string group_type;
+  std::string topology_digest;
+  std::string byte_semantics;
+  std::string byte_unit;
+  std::string time_unit;
+  std::string bandwidth_unit;
+  std::string dtype;
+  std::string reduction;
+  std::string correctness_status;
+  int rank_count = 0;
+  uint64_t message_bytes = 0;
+  uint64_t time_ns = 0;
+  double normalized_bandwidth_Bps = 0.0;
+  bool eligible_for_fit = false;
+  if (!StringMember(raw, "apiVersion", &api_version) ||
+      api_version != "simai.ascend.observation/v1alpha1" ||
+      !StringMember(raw, "kind", &kind) || kind != "HcclRawSample" ||
+      !StringMember(raw, "schemaSemver", &schema_semver) ||
+      schema_semver != "0.1.0" || metadata == nullptr ||
+      !StringMember(*metadata, "id", &raw_id) ||
+      raw_id != model.input_sample_id || spec == nullptr ||
+      !StringMember(*spec, "profileRef", &profile_ref) ||
+      profile_ref != profile.id ||
+      !StringMember(*spec, "profileDigest", &raw_profile_digest) ||
+      raw_profile_digest != profile_digest ||
+      !StringMember(*spec, "collective", &collective) ||
+      collective != model.collective || group == nullptr ||
+      !PositiveIntMember(*group, "rankCount", &rank_count) ||
+      rank_count != model.config.rank_count ||
+      !StringMember(*group, "scope", &scope) ||
+      scope != profile.topology_domain ||
+      !StringMember(*group, "groupType", &group_type) ||
+      group_type != AstraSim::CostedGroupTypeName(model.config.group_type) ||
+      !StringMember(*group, "topologyDigest", &topology_digest) ||
+      topology_digest != profile.topology_digest || bytes_per_rank == nullptr ||
+      !StringMember(*bytes_per_rank, "semantics", &byte_semantics) ||
+      byte_semantics != "API_INPUT_BYTES" ||
+      !PositiveUint64Member(
+          *bytes_per_rank, "uniformValue", &message_bytes) ||
+      message_bytes < model.config.minimum_message_bytes ||
+      message_bytes > model.config.maximum_message_bytes ||
+      !StringMember(*bytes_per_rank, "unit", &byte_unit) || byte_unit != "B" ||
+      !StringMember(*payload, "dtype", &dtype) || dtype != model.dtype ||
+      !StringMember(*payload, "reduction", &reduction) ||
+      reduction != model.reduction || average_time == nullptr ||
+      !PositiveUint64Member(*average_time, "value", &time_ns) ||
+      !StringMember(*average_time, "unit", &time_unit) || time_unit != "ns" ||
+      alg_bandwidth == nullptr ||
+      !NumberMember(
+          *alg_bandwidth, "value", &normalized_bandwidth_Bps) ||
+      normalized_bandwidth_Bps <= 0.0 ||
+      !StringMember(*alg_bandwidth, "unit", &bandwidth_unit) ||
+      bandwidth_unit != "B/s" || first_evidence == nullptr ||
+      !StringMember(
+          *first_evidence, "class", &validated->evidence_level) ||
+      !StringMember(
+          *first_evidence, "readiness", &validated->field_readiness) ||
+      validated->field_readiness != "FIELD_UNVERIFIED" ||
+      !EvidenceRecordIsComplete(*first_evidence) || correctness == nullptr ||
+      !StringMember(*correctness, "status", &correctness_status) ||
+      correctness_status != "PASS" || eligibility == nullptr ||
+      !BooleanMember(*eligibility, "fit", &eligible_for_fit) ||
+      !eligible_for_fit || !UnitsAreCanonical(raw) ||
+      ContainsString(raw, "MEASURED")) {
+    Reject(
+        contract,
+        "RAW_OBSERVATION_SCHEMA_INVALID",
+        "The immutable HCCL RawObservation is invalid or out of domain.",
+        "Use a canonical-unit AllReduce observation matching Profile and model.");
+    return false;
+  }
+
+  const double predicted_ns =
+      static_cast<double>(model.config.startup_ns) +
+      static_cast<double>(message_bytes) * 1000000000.0 /
+          model.config.bandwidth_Bps;
+  const uint64_t rounded_prediction_ns =
+      static_cast<uint64_t>(std::llround(predicted_ns));
+  const uint64_t timing_residual_ns = time_ns > rounded_prediction_ns
+      ? time_ns - rounded_prediction_ns
+      : rounded_prediction_ns - time_ns;
+  const double implied_bandwidth_Bps =
+      static_cast<double>(message_bytes) * 1000000000.0 /
+      static_cast<double>(time_ns);
+  const double bandwidth_relative_residual =
+      std::fabs(normalized_bandwidth_Bps - implied_bandwidth_Bps) /
+      implied_bandwidth_Bps;
+  if (timing_residual_ns > 1U ||
+      !std::isfinite(bandwidth_relative_residual) ||
+      bandwidth_relative_residual > 0.00001) {
+    Reject(
+        contract,
+        "RAW_OBSERVATION_MODEL_INCONSISTENT",
+        "The RawObservation timing or normalized bandwidth is inconsistent.",
+        "Keep timing within 1 ns and bandwidth within 10 ppm of bytes/time.");
+    return false;
+  }
+  return true;
+}
+
+bool LoadAscendResources(
+    const JsonValue& root,
+    const JsonValue& profile_reference,
+    AnalyticalRunContract* contract) {
+  const ArtifactLoadPolicy profile_policy = {
+      "DEVICE_PROFILE_REFERENCE_INVALID",
+      "The Ascend Profile reference is invalid.",
+      "Provide device_profile.path and its SHA-256 digest.",
+      "DEVICE_PROFILE_NOT_FOUND",
+      "The Ascend Profile could not be read.",
+      "Provide a readable public Ascend Profile artifact.",
+      "DEVICE_PROFILE_DIGEST_MISMATCH",
+      "The Ascend Profile does not match its declared digest.",
+      "Use the intended immutable Profile or update its digest.",
+      "DEVICE_PROFILE_INVALID_JSON",
+      "The Ascend Profile is not valid JSON.",
+      "Correct the Profile JSON and retry."};
+  LoadedArtifact profile_artifact;
+  if (!LoadArtifact(
+          profile_reference, profile_policy, contract, &profile_artifact)) {
+    return false;
+  }
+  contract->device_profile_sha256 = profile_artifact.sha256;
+
+  ValidatedAscendProfile profile;
+  if (!ValidateAscendProfile(
+          profile_artifact.document, contract, &profile)) {
     return false;
   }
 
@@ -925,336 +1446,80 @@ bool LoadAscendResources(
         "Provide collective_cost_model.path and its SHA-256 digest.");
     return false;
   }
-  std::string model_path;
-  std::string declared_model_digest;
-  if (!ParseArtifactReference(
-          *model_reference, &model_path, &declared_model_digest)) {
-    Reject(
-        contract,
-        "HCCL_COST_MODEL_REFERENCE_INVALID",
-        "The HCCL cost model reference is invalid.",
-        "Provide collective_cost_model.path and its SHA-256 digest.");
+  const ArtifactLoadPolicy model_policy = {
+      "HCCL_COST_MODEL_REFERENCE_INVALID",
+      "The HCCL cost model reference is invalid.",
+      "Provide collective_cost_model.path and its SHA-256 digest.",
+      "HCCL_COST_MODEL_NOT_FOUND",
+      "The HCCL cost model could not be read.",
+      "Provide a readable public HCCL cost model artifact.",
+      "HCCL_COST_MODEL_DIGEST_MISMATCH",
+      "The HCCL cost model does not match its declared digest.",
+      "Use the intended DerivedCostModel or update its digest.",
+      "HCCL_COST_MODEL_INVALID_JSON",
+      "The HCCL cost model is not valid JSON.",
+      "Correct the cost model JSON and retry."};
+  LoadedArtifact model_artifact;
+  if (!LoadArtifact(
+          *model_reference, model_policy, contract, &model_artifact)) {
     return false;
   }
-  std::string model_content;
-  if (!ReadFile(model_path, &model_content)) {
-    Reject(
-        contract,
-        "HCCL_COST_MODEL_NOT_FOUND",
-        "The HCCL cost model could not be read.",
-        "Provide a readable public HCCL cost model artifact.");
-    return false;
-  }
-  contract->cost_model_sha256 = "sha256:" + Sha256Hex(model_content);
-  if (contract->cost_model_sha256 != declared_model_digest) {
-    Reject(
-        contract,
-        "HCCL_COST_MODEL_DIGEST_MISMATCH",
-        "The HCCL cost model does not match its declared digest.",
-        "Use the intended DerivedCostModel or update its digest.");
-    return false;
-  }
-  JsonValue model;
-  if (!ParseJsonDocument(model_content, &model)) {
-    Reject(
-        contract,
-        "HCCL_COST_MODEL_INVALID_JSON",
-        "The HCCL cost model is not valid JSON.",
-        "Correct the cost model JSON and retry.");
+  contract->cost_model_sha256 = model_artifact.sha256;
+
+  ValidatedHcclCostModel model;
+  if (!ValidateHcclCostModel(
+          model_artifact.document,
+          profile_artifact.sha256,
+          profile,
+          contract,
+          &model)) {
     return false;
   }
 
-  const JsonValue* model_metadata = Member(model, "metadata");
-  const JsonValue* model_spec = Member(model, "spec");
-  const JsonValue* group_domain =
-      model_spec == nullptr ? nullptr : Member(*model_spec, "groupDomain");
-  const JsonValue* message_domain =
-      model_spec == nullptr ? nullptr : Member(*model_spec, "messageDomainBytes");
-  const JsonValue* fit =
-      model_spec == nullptr ? nullptr : Member(*model_spec, "fit");
-  const JsonValue* startup = fit == nullptr ? nullptr : Member(*fit, "startup");
-  const JsonValue* bandwidth = fit == nullptr ? nullptr : Member(*fit, "bandwidth");
-  const JsonValue* input_sample =
-      model_spec == nullptr ? nullptr : FirstArrayObject(*model_spec, "inputSamples");
-  const JsonValue* input_samples =
-      model_spec == nullptr ? nullptr : Member(*model_spec, "inputSamples");
-  const JsonValue* extrapolation =
-      model_spec == nullptr ? nullptr : Member(*model_spec, "extrapolation");
-  const JsonValue* traffic =
-      model_spec == nullptr ? nullptr : Member(*model_spec, "traffic");
-  std::string model_id;
-  std::string input_sample_id;
-  std::string model_profile_digest;
-  std::string collective;
-  std::string dtype;
-  std::string reduction;
-  std::string timing_scope;
-  std::string group_type;
-  std::string model_topology_domain;
-  std::string model_topology_digest;
-  std::string message_unit;
-  std::string family;
-  std::string formula;
-  std::string interpolation;
-  std::string startup_unit;
-  std::string bandwidth_unit;
-  std::string model_evidence_level;
-  std::string model_field_readiness;
-  std::string traffic_algorithm;
-  std::string traffic_semantics;
-  int model_rank_count = 0;
-  uint64_t minimum_message_bytes = 0;
-  uint64_t maximum_message_bytes = 0;
-  uint64_t startup_ns = 0;
-  double bandwidth_Bps = 0.0;
-  bool extrapolation_allowed = true;
-  if (!StringMember(model, "apiVersion", &api_version) ||
-      api_version != "simai.ascend.costmodel/v1alpha1" ||
-      !StringMember(model, "kind", &kind) || kind != "HcclCostModel" ||
-      !StringMember(model, "schemaSemver", &schema_semver) ||
-      schema_semver != "0.1.0" || model_metadata == nullptr ||
-      !StringMember(*model_metadata, "id", &model_id) || model_id.empty() ||
-      model_spec == nullptr ||
-      !StringMember(*model_spec, "profileDigest", &model_profile_digest) ||
-      model_profile_digest != contract->device_profile_sha256 ||
-      !StringMember(*model_spec, "collective", &collective) ||
-      collective != "ALL_REDUCE" || group_domain == nullptr ||
-      !StringMember(*model_spec, "dtype", &dtype) || dtype != "BF16" ||
-      !StringMember(*model_spec, "reduction", &reduction) ||
-      reduction != "SUM" ||
-      !StringMember(*model_spec, "timingScope", &timing_scope) ||
-      timing_scope != "DEVICE_ONLY" ||
-      !FirstArrayPositiveInt(*group_domain, "rankCounts", &model_rank_count) ||
-      !FirstArrayString(*group_domain, "groupTypes", &group_type) ||
-      !FirstArrayString(*group_domain, "scopes", &model_topology_domain) ||
-      !FirstArrayString(
-          *group_domain, "topologyDigests", &model_topology_digest) ||
-      model_rank_count != profile_rank_count ||
-      model_topology_domain != topology_domain ||
-      model_topology_digest != topology_digest || message_domain == nullptr ||
-      !PositiveUint64Member(
-          *message_domain, "min", &minimum_message_bytes) ||
-      !PositiveUint64Member(
-          *message_domain, "max", &maximum_message_bytes) ||
-      minimum_message_bytes > maximum_message_bytes ||
-      !StringMember(*message_domain, "unit", &message_unit) ||
-      message_unit != "B" || fit == nullptr ||
-      !StringMember(*fit, "family", &family) || family != "ALPHA_BETA" ||
-      !StringMember(*fit, "formula", &formula) ||
-      formula !=
-          "round(startup_ns + message_B / bandwidth_Bps * 1000000000)" ||
-      !StringMember(*fit, "interpolation", &interpolation) ||
-      interpolation != "NONE" ||
-      startup == nullptr ||
-      !PositiveUint64Member(*startup, "value", &startup_ns) ||
-      !StringMember(*startup, "unit", &startup_unit) || startup_unit != "ns" ||
-      bandwidth == nullptr ||
-      !NumberMember(*bandwidth, "value", &bandwidth_Bps) ||
-      bandwidth_Bps <= 0.0 ||
-      !StringMember(*bandwidth, "unit", &bandwidth_unit) ||
-      bandwidth_unit != "B/s" || input_sample == nullptr ||
-      input_samples == nullptr ||
-      input_samples->type != JsonValue::Type::Array ||
-      input_samples->array.size() != 1U ||
-      !StringMember(*input_sample, "id", &input_sample_id) ||
-      input_sample_id.empty() || traffic == nullptr ||
-      !StringMember(*traffic, "algorithm", &traffic_algorithm) ||
-      traffic_algorithm != "RING" ||
-      !StringMember(*traffic, "semantics", &traffic_semantics) ||
-      traffic_semantics != "ALGORITHM_TOTAL_GROUP_BYTES" ||
-      !StringMember(*model_spec, "evidenceClass", &model_evidence_level) ||
-      model_evidence_level != "DERIVED" ||
-      !StringMember(*model_spec, "readiness", &model_field_readiness) ||
-      model_field_readiness != "FIELD_UNVERIFIED" || extrapolation == nullptr ||
-      !BooleanMember(
-          *extrapolation, "allowed", &extrapolation_allowed) ||
-      extrapolation_allowed || !UnitsAreCanonical(model) ||
-      ContainsString(model, "MEASURED")) {
-    Reject(
-        contract,
-        "HCCL_COST_MODEL_SCHEMA_INVALID",
-        "The HCCL DerivedCostModel or its domain is invalid.",
-        "Provide a non-extrapolating AllReduce ALPHA_BETA model matching the Profile.");
+  const ArtifactLoadPolicy raw_policy = {
+      "RAW_OBSERVATION_REFERENCE_INVALID",
+      "The DerivedCostModel RawObservation reference is invalid.",
+      "Reference one immutable RawObservation by path and SHA-256.",
+      "RAW_OBSERVATION_NOT_FOUND",
+      "The referenced RawObservation could not be read.",
+      "Provide the immutable public RawObservation artifact.",
+      "RAW_OBSERVATION_DIGEST_MISMATCH",
+      "The RawObservation does not match its declared digest.",
+      "Restore the immutable RawObservation or derive a new model.",
+      "RAW_OBSERVATION_INVALID_JSON",
+      "The RawObservation is not valid JSON.",
+      "Correct the RawObservation JSON and derive a new model."};
+  LoadedArtifact raw_artifact;
+  if (!LoadArtifact(
+          model.raw_reference, raw_policy, contract, &raw_artifact)) {
+    return false;
+  }
+  contract->raw_observation_sha256 = raw_artifact.sha256;
+
+  ValidatedRawObservation raw;
+  if (!ValidateRawObservation(
+          raw_artifact.document,
+          profile_artifact.sha256,
+          profile,
+          model,
+          contract,
+          &raw)) {
     return false;
   }
 
-  std::string raw_path;
-  std::string declared_raw_digest;
-  if (!ParseArtifactReference(
-          *input_sample, &raw_path, &declared_raw_digest)) {
-    Reject(
-        contract,
-        "RAW_OBSERVATION_REFERENCE_INVALID",
-        "The DerivedCostModel RawObservation reference is invalid.",
-        "Reference one immutable RawObservation by path and SHA-256.");
-    return false;
-  }
-  std::string raw_content;
-  if (!ReadFile(raw_path, &raw_content)) {
-    Reject(
-        contract,
-        "RAW_OBSERVATION_NOT_FOUND",
-        "The referenced RawObservation could not be read.",
-        "Provide the immutable public RawObservation artifact.");
-    return false;
-  }
-  contract->raw_observation_sha256 = "sha256:" + Sha256Hex(raw_content);
-  if (contract->raw_observation_sha256 != declared_raw_digest) {
-    Reject(
-        contract,
-        "RAW_OBSERVATION_DIGEST_MISMATCH",
-        "The RawObservation does not match its declared digest.",
-        "Restore the immutable RawObservation or derive a new model.");
-    return false;
-  }
-  JsonValue raw;
-  if (!ParseJsonDocument(raw_content, &raw)) {
-    Reject(
-        contract,
-        "RAW_OBSERVATION_INVALID_JSON",
-        "The RawObservation is not valid JSON.",
-        "Correct the RawObservation JSON and derive a new model.");
-    return false;
-  }
-
-  const JsonValue* raw_spec = Member(raw, "spec");
-  const JsonValue* raw_metadata = Member(raw, "metadata");
-  const JsonValue* raw_group =
-      raw_spec == nullptr ? nullptr : Member(*raw_spec, "group");
-  const JsonValue* payload =
-      raw_spec == nullptr ? nullptr : Member(*raw_spec, "payload");
-  const JsonValue* bytes_per_rank =
-      payload == nullptr ? nullptr : Member(*payload, "bytesPerRank");
-  const JsonValue* normalized =
-      raw_spec == nullptr ? nullptr : Member(*raw_spec, "normalized");
-  const JsonValue* average_time =
-      normalized == nullptr ? nullptr : Member(*normalized, "averageTime");
-  const JsonValue* alg_bandwidth =
-      normalized == nullptr ? nullptr : Member(*normalized, "algBandwidth");
-  const JsonValue* raw_evidence =
-      raw_spec == nullptr ? nullptr : FirstArrayObject(*raw_spec, "evidence");
-  const JsonValue* correctness =
-      raw_spec == nullptr ? nullptr : Member(*raw_spec, "correctness");
-  const JsonValue* eligibility =
-      raw_spec == nullptr ? nullptr : Member(*raw_spec, "eligibility");
-  std::string raw_profile_ref;
-  std::string raw_id;
-  std::string raw_profile_digest;
-  std::string raw_collective;
-  std::string raw_scope;
-  std::string raw_group_type;
-  std::string raw_topology_digest;
-  std::string raw_byte_semantics;
-  std::string raw_byte_unit;
-  std::string raw_time_unit;
-  std::string raw_bandwidth_unit;
-  std::string raw_evidence_level;
-  std::string raw_field_readiness;
-  std::string raw_dtype;
-  std::string raw_reduction;
-  std::string correctness_status;
-  int raw_rank_count = 0;
-  uint64_t raw_message_bytes = 0;
-  uint64_t raw_time_ns = 0;
-  double raw_bandwidth_Bps = 0.0;
-  bool eligible_for_fit = false;
-  if (!StringMember(raw, "apiVersion", &api_version) ||
-      api_version != "simai.ascend.observation/v1alpha1" ||
-      !StringMember(raw, "kind", &kind) || kind != "HcclRawSample" ||
-      !StringMember(raw, "schemaSemver", &schema_semver) ||
-      schema_semver != "0.1.0" || raw_metadata == nullptr ||
-      !StringMember(*raw_metadata, "id", &raw_id) ||
-      raw_id != input_sample_id || raw_spec == nullptr ||
-      !StringMember(*raw_spec, "profileRef", &raw_profile_ref) ||
-      raw_profile_ref != profile_id ||
-      !StringMember(*raw_spec, "profileDigest", &raw_profile_digest) ||
-      raw_profile_digest != contract->device_profile_sha256 ||
-      !StringMember(*raw_spec, "collective", &raw_collective) ||
-      raw_collective != collective || raw_group == nullptr ||
-      !PositiveIntMember(*raw_group, "rankCount", &raw_rank_count) ||
-      raw_rank_count != model_rank_count ||
-      !StringMember(*raw_group, "scope", &raw_scope) ||
-      raw_scope != model_topology_domain ||
-      !StringMember(*raw_group, "groupType", &raw_group_type) ||
-      raw_group_type != group_type ||
-      !StringMember(*raw_group, "topologyDigest", &raw_topology_digest) ||
-      raw_topology_digest != model_topology_digest || bytes_per_rank == nullptr ||
-      !StringMember(
-          *bytes_per_rank, "semantics", &raw_byte_semantics) ||
-      raw_byte_semantics != "API_INPUT_BYTES" ||
-      !PositiveUint64Member(
-          *bytes_per_rank, "uniformValue", &raw_message_bytes) ||
-      raw_message_bytes < minimum_message_bytes ||
-      raw_message_bytes > maximum_message_bytes ||
-      !StringMember(*bytes_per_rank, "unit", &raw_byte_unit) ||
-      raw_byte_unit != "B" ||
-      !StringMember(*payload, "dtype", &raw_dtype) || raw_dtype != dtype ||
-      !StringMember(*payload, "reduction", &raw_reduction) ||
-      raw_reduction != reduction || average_time == nullptr ||
-      !PositiveUint64Member(*average_time, "value", &raw_time_ns) ||
-      !StringMember(*average_time, "unit", &raw_time_unit) ||
-      raw_time_unit != "ns" || alg_bandwidth == nullptr ||
-      !NumberMember(*alg_bandwidth, "value", &raw_bandwidth_Bps) ||
-      raw_bandwidth_Bps <= 0.0 ||
-      !StringMember(*alg_bandwidth, "unit", &raw_bandwidth_unit) ||
-      raw_bandwidth_unit != "B/s" || raw_evidence == nullptr ||
-      !StringMember(*raw_evidence, "class", &raw_evidence_level) ||
-      !StringMember(
-          *raw_evidence, "readiness", &raw_field_readiness) ||
-      raw_field_readiness != "FIELD_UNVERIFIED" ||
-      !EvidenceRecordIsComplete(*raw_evidence) ||
-      correctness == nullptr ||
-      !StringMember(*correctness, "status", &correctness_status) ||
-      correctness_status != "PASS" || eligibility == nullptr ||
-      !BooleanMember(*eligibility, "fit", &eligible_for_fit) ||
-      !eligible_for_fit ||
-      !UnitsAreCanonical(raw) || ContainsString(raw, "MEASURED")) {
-    Reject(
-        contract,
-        "RAW_OBSERVATION_SCHEMA_INVALID",
-        "The immutable HCCL RawObservation is invalid or out of domain.",
-        "Use a canonical-unit AllReduce observation matching Profile and model.");
-    return false;
-  }
-
-  if (group_type == "TP") {
-    contract->hccl_cost_model.group_type = AstraSim::CostedGroupType::TP;
-  } else if (group_type == "DP") {
-    contract->hccl_cost_model.group_type = AstraSim::CostedGroupType::DP;
-  } else if (group_type == "EP") {
-    contract->hccl_cost_model.group_type = AstraSim::CostedGroupType::EP;
-  } else if (group_type == "DP_EP") {
-    contract->hccl_cost_model.group_type = AstraSim::CostedGroupType::DP_EP;
-  } else {
-    Reject(
-        contract,
-        "HCCL_COST_MODEL_SCHEMA_INVALID",
-        "The HCCL group type is unsupported.",
-        "Use TP, DP, EP, or DP_EP.");
-    return false;
-  }
-  contract->hccl_cost_model.model_id = model_id;
-  contract->hccl_cost_model.collective = AstraSim::CostedCollective::AllReduce;
-  contract->hccl_cost_model.rank_count = model_rank_count;
-  contract->hccl_cost_model.minimum_message_bytes = minimum_message_bytes;
-  contract->hccl_cost_model.maximum_message_bytes = maximum_message_bytes;
-  contract->hccl_cost_model.startup_ns = startup_ns;
-  contract->hccl_cost_model.bandwidth_Bps = bandwidth_Bps;
-  contract->hccl_cost_model.topology_domain = topology_domain;
-  contract->hccl_cost_model.topology_digest = topology_digest;
-  contract->ascend_rank_count = profile_rank_count;
-  contract->topology_domain = topology_domain;
-  contract->topology_digest = topology_digest;
-  contract->profile_evidence_level = profile_evidence_level;
-  contract->profile_field_readiness = profile_field_readiness;
-  contract->raw_observation_evidence_level = raw_evidence_level;
-  contract->raw_observation_field_readiness = raw_field_readiness;
-  contract->cost_model_evidence_level = model_evidence_level;
-  contract->cost_model_field_readiness = model_field_readiness;
+  contract->hccl_cost_model = model.config;
+  contract->ascend_rank_count = profile.rank_count;
+  contract->topology_domain = profile.topology_domain;
+  contract->topology_digest = profile.topology_digest;
+  contract->profile_evidence_level = profile.evidence_level;
+  contract->profile_field_readiness = profile.field_readiness;
+  contract->raw_observation_evidence_level = raw.evidence_level;
+  contract->raw_observation_field_readiness = raw.field_readiness;
+  contract->cost_model_evidence_level = model.evidence_level;
+  contract->cost_model_field_readiness = model.field_readiness;
   contract->ascend_profiled = true;
   return true;
 }
-
 std::string JsonEscape(const std::string& input) {
   std::ostringstream escaped;
   for (const unsigned char character : input) {

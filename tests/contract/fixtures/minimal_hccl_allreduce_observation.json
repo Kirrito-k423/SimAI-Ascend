@@ -7,7 +7,7 @@
   },
   "spec": {
     "profileRef": "synthetic-a2-four-rank-host",
-    "profileDigest": "sha256:3749a4018f73ee88785ec87217412238c51c789ef42bcbbae09a076cb575bb9b",
+    "profileDigest": "sha256:78f97d9472b229f6a8dc835f41b7ac4e4554d1c5b0e89bde396484013f51f6ef",
     "collective": "ALL_REDUCE",
     "group": {
       "rankCount": 4,

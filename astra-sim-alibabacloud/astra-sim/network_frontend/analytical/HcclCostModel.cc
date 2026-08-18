@@ -48,8 +48,10 @@ AstraSim::CollectiveCostEstimate HcclCostModel::Estimate(
       config_.bandwidth_Bps;
   const double duration_ns =
       static_cast<double>(config_.startup_ns) + transfer_ns;
+  const double llround_upper_exclusive = std::ldexp(
+      1.0, std::numeric_limits<long long>::digits);
   if (!std::isfinite(duration_ns) || duration_ns < 0.0 ||
-      duration_ns > static_cast<double>(std::numeric_limits<uint64_t>::max())) {
+      duration_ns >= llround_upper_exclusive) {
     return Unsupported("MODEL_RESULT_OUT_OF_RANGE");
   }
   const uint64_t ring_multiplier =
