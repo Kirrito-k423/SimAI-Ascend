@@ -1,0 +1,80 @@
+{
+  "schema_version": "simai.a2.environment-evidence/v1",
+  "issue": 21,
+  "recorded_at": "2026-08-18T20:12:47+0800",
+  "status": "BLOCKED_ENV",
+  "reject_code": "A2_HCCL_ABI_UNAVAILABLE",
+  "a2_records_configured": 2,
+  "reachable_records": 1,
+  "authentication_failed_records": 1,
+  "hardware_present": true,
+  "lock_contract": {
+    "identity": "REQUIRED_SHARED_NPU_LOCK",
+    "wait_seconds": 7200,
+    "whole_remote_command_locked": true,
+    "queue_observation": "NO_QUEUE_OBSERVED",
+    "reacquired_after_bounded_abort_at": "2026-08-18T20:10:33+0800"
+  },
+  "attempts": [
+    {
+      "ordinal": 1,
+      "started_at": "2026-08-18T20:01:06+0800",
+      "result": "CONNECTED_LOCK_ACQUIRED",
+      "observed": {
+        "architecture": "aarch64",
+        "operating_system": "openEuler-22.03",
+        "npu_rank_device_count": 8,
+        "driver_version": "25.3.rc1",
+        "global_python": "3.13.11",
+        "global_torch_import": "FAILED",
+        "global_torch_npu_import": "FAILED",
+        "mind_speed_llm_checkout": "MISSING",
+        "mind_speed_checkout_commit": "e4772499f7eb9fa9a68919dd1eaddef00e915b2d",
+        "mind_speed_checkout_dirty_entries": 3,
+        "megatron_lm_checkout_commit": "ddc0d6774783b032ddceacc5714e653651daecb9",
+        "megatron_lm_checkout_dirty_entries": 0
+      }
+    },
+    {
+      "ordinal": 2,
+      "started_at": "2026-08-18T20:02:34+0800",
+      "result": "TARGET_ENV_INCOMPLETE",
+      "observed": {
+        "configured_isolated_env": "PRESENT",
+        "python": "3.11.14",
+        "torch_import": "FAILED",
+        "torch_npu_import": "FAILED",
+        "mind_speed_module": "MISSING",
+        "mind_speed_llm_module": "MISSING",
+        "megatron_module": "MISSING"
+      }
+    },
+    {
+      "ordinal": 3,
+      "started_at": "2026-08-18T20:11:12+0800",
+      "result": "ABI_AND_SOURCE_INCOMPLETE",
+      "observed": {
+        "python_3_10_binary": "MISSING",
+        "cached_torch_2_7_1_wheels": 0,
+        "cached_torch_npu_2_7_1_or_7_3_wheels": 0,
+        "mind_speed_llm_target_pin": "MISSING",
+        "mind_speed_target_pin_in_mirror": "PRESENT",
+        "megatron_lm_target_pin_in_mirror": "PRESENT",
+        "cann_set_env": "PRESENT",
+        "cann_version_identity": "UNKNOWN",
+        "hccl_shared_library": "MISSING",
+        "python_package_sources": "REACHABLE",
+        "isolated_env_audit": "BOUNDED_ABORT_AFTER_IMPORT_HANG"
+      }
+    }
+  ],
+  "minimum_remediation": [
+    "Provide a clean isolated Python 3.10 lane with PyTorch 2.7.1 and TorchNPU 7.3.0.",
+    "Provide clean checkouts of MindSpeed-LLM, MindSpeed and Megatron-LM at the frozen commits.",
+    "Install or expose the matching CANN 8.5 HCCL runtime and verify its ABI digest without changing the system-wide dirty repositories.",
+    "Repeat locked L0 import, BF16 correctness and eight-rank domain formation before any training sample."
+  ],
+  "ground_truth_produced": false,
+  "derived_model_fitted": false,
+  "sanitization": "No host, account, address, credential, private inventory, access command, or raw host log is included."
+}

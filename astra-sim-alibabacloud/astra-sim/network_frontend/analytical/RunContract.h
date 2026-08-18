@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "A2GroundTruth.h"
 #include "HcclCostModel.h"
 #include "astra-sim/system/Common.hh"
 
@@ -130,6 +131,17 @@ struct AnalyticalRunContract {
   int target_top_k = 0;
   int target_expert_intermediate_size = 0;
   int target_shared_experts = 0;
+  bool a2_ground_truth_present = false;
+  bool a2_ground_truth_ready = false;
+  bool a2_calibration_eligible = false;
+  std::string a2_ground_truth_run_sha256 = "UNKNOWN";
+  std::string a2_ground_truth_result_sha256 = "UNKNOWN";
+  std::string a2_ground_truth_status = "UNKNOWN";
+  std::string a2_ground_truth_evidence_level = "UNKNOWN";
+  std::string a2_ground_truth_field_readiness = "UNKNOWN";
+  std::string a2_derived_cost_model_sha256 = "UNKNOWN";
+  int a2_raw_observation_count = 0;
+  std::vector<A2GroundTruthScenarioSummary> a2_scenarios;
   HcclCostModelConfig hccl_cost_model;
   bool workload_digest_verified = false;
   LegacyGpuRunConfig legacy_gpu;

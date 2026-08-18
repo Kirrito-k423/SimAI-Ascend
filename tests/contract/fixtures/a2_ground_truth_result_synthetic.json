@@ -1,0 +1,97 @@
+{
+  "apiVersion": "simai.ground-truth/v1",
+  "kind": "GroundTruthResult",
+  "metadata": {
+    "id": "test-only-a2-reduced-moe-result-v1",
+    "generation": "A2"
+  },
+  "spec": {
+    "groundTruthRunDigest": "sha256:138b0c6a7311e2c1244106dd0e7db25a457dbce0ba3f42e4fb4a1bd872f4ee4b",
+    "status": "VALID",
+    "block": {
+      "reason": "NONE",
+      "remediation": "NONE"
+    },
+    "rawObservations": [
+      {
+        "path": "tests/contract/fixtures/minimal_hccl_allreduce_observation.json",
+        "sha256": "sha256:0abeb06593328bbabef9e7b5aa04008c0df6136c24256aaa262ecceedee12f58"
+      }
+    ],
+    "derivedCostModel": {
+      "path": "tests/contract/fixtures/minimal_hccl_allreduce_cost_model.json",
+      "sha256": "sha256:aa3be631b9a360f499c87c01832184121dff71173951683c95b46c7d6c0398b8"
+    },
+    "scenarios": [
+      {
+        "id": "A2-CAL-BALANCED",
+        "status": "VALID",
+        "stepTimeNs": [100000000, 102000000, 101000000, 99000000, 98000000],
+        "peakHbmB": [30000000000, 30100000000, 30200000000, 30050000000, 30150000000],
+        "baseHbmB": 68719476736,
+        "completedRanks": 8,
+        "expectedRanks": 8,
+        "lossFinite": true,
+        "gradientsFinite": true,
+        "oom": false,
+        "configuredTokens": 16384,
+        "consumedTokens": 16384,
+        "droppedTokens": 0,
+        "replayedTokens": 0,
+        "provenanceDigest": "sha256:138b0c6a7311e2c1244106dd0e7db25a457dbce0ba3f42e4fb4a1bd872f4ee4b"
+      },
+      {
+        "id": "A2-CAL-COMM",
+        "status": "VALID",
+        "stepTimeNs": [100000000, 130000000, 70000000, 140000000, 60000000, 80000000, 90000000, 110000000, 120000000, 150000000],
+        "peakHbmB": [29000000000, 29100000000, 29200000000, 29300000000, 29400000000, 29500000000, 29600000000, 29700000000, 29800000000, 29900000000],
+        "baseHbmB": 68719476736,
+        "completedRanks": 8,
+        "expectedRanks": 8,
+        "lossFinite": true,
+        "gradientsFinite": true,
+        "oom": false,
+        "configuredTokens": 16384,
+        "consumedTokens": 16384,
+        "droppedTokens": 0,
+        "replayedTokens": 0,
+        "provenanceDigest": "sha256:138b0c6a7311e2c1244106dd0e7db25a457dbce0ba3f42e4fb4a1bd872f4ee4b"
+      },
+      {
+        "id": "A2-CAL-LONG",
+        "status": "VALID",
+        "stepTimeNs": [200000000, 202000000, 198000000, 201000000, 199000000],
+        "peakHbmB": [32000000000, 32100000000, 32200000000, 32150000000, 32050000000],
+        "baseHbmB": 68719476736,
+        "completedRanks": 8,
+        "expectedRanks": 8,
+        "lossFinite": true,
+        "gradientsFinite": true,
+        "oom": false,
+        "configuredTokens": 32768,
+        "consumedTokens": 32768,
+        "droppedTokens": 0,
+        "replayedTokens": 0,
+        "provenanceDigest": "sha256:138b0c6a7311e2c1244106dd0e7db25a457dbce0ba3f42e4fb4a1bd872f4ee4b"
+      }
+    ],
+    "evidence": {
+      "id": "test-only-synthetic-result",
+      "class": "USER_INPUT",
+      "readiness": "FIELD_UNVERIFIED",
+      "source": {
+        "uri": "fixture://issue-21/a2-ground-truth-result",
+        "ref": "test-only-v1"
+      },
+      "method": {
+        "name": "contract-fixture",
+        "version": "1"
+      },
+      "asOf": "2026-08-18T00:00:00+08:00",
+      "conditions": {
+        "hardwareAvailable": false
+      },
+      "sanitization": "test-only-synthetic-no-host-data"
+    }
+  }
+}

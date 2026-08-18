@@ -2791,6 +2791,615 @@ bool ApplyTargetMemoryGates(AnalyticalRunContract* contract) {
   return true;
 }
 
+bool ParsePositiveUint64Array(
+    const JsonValue& object,
+    const std::string& key,
+    std::vector<uint64_t>* values) {
+  const JsonValue* array = Member(object, key);
+  if (array == nullptr || array->type != JsonValue::Type::Array ||
+      array->array.empty()) {
+    return false;
+  }
+  values->clear();
+  for (const JsonValue& element : array->array) {
+    uint64_t value = 0U;
+    if (!ExactUnsignedDecimal(
+            element, 9007199254740991ULL, false, &value)) {
+      return false;
+    }
+    values->push_back(value);
+  }
+  return true;
+}
+
+bool GroundTruthRunHasFrozenContract(
+    const JsonValue& root,
+    AnalyticalRunContract* contract) {
+  const JsonValue* metadata = Member(root, "metadata");
+  const JsonValue* spec = Member(root, "spec");
+  const JsonValue* source = spec == nullptr
+      ? nullptr
+      : Member(*spec, "sourceIdentity");
+  const JsonValue* runtime = spec == nullptr
+      ? nullptr
+      : Member(*spec, "runtimeIdentity");
+  const JsonValue* model = spec == nullptr ? nullptr : Member(*spec, "model");
+  const JsonValue* parallel = spec == nullptr
+      ? nullptr
+      : Member(*spec, "parallelism");
+  const JsonValue* topology = spec == nullptr
+      ? nullptr
+      : Member(*spec, "rankTopology");
+  const JsonValue* metrics = spec == nullptr
+      ? nullptr
+      : Member(*spec, "metricContract");
+  const JsonValue* scenarios = spec == nullptr
+      ? nullptr
+      : Member(*spec, "scenarios");
+  const JsonValue* evidence = spec == nullptr
+      ? nullptr
+      : Member(*spec, "evidence");
+  std::string api_version;
+  std::string kind;
+  std::string id;
+  std::string generation;
+  bool frozen = false;
+  std::string llm_commit;
+  std::string mindspeed_commit;
+  std::string megatron_commit;
+  std::string python_version;
+  std::string pytorch_version;
+  std::string torch_npu_version;
+  std::string cann_version;
+  std::string driver_version;
+  std::string abi_digest;
+  int active_layers = 0;
+  int experts = 0;
+  int top_k = 0;
+  int expert_width = 0;
+  int shared_experts = 0;
+  int mbs = 0;
+  int tp = 0;
+  int pp = 0;
+  int ep = 0;
+  int dp = 0;
+  int world_size = 0;
+  int ranks_per_device = 0;
+  std::string rank_mapping_digest;
+  std::string step_unit;
+  std::string hbm_unit;
+  std::string hccl_unit;
+  bool warmup_excluded = false;
+  int initial_samples = 0;
+  int extended_samples = 0;
+  double cv_threshold = 0.0;
+  std::string high_variation_statistic;
+  int hbm_percent = 0;
+  std::string hbm_comparison;
+  if (!ObjectHasExactKeys(root, {"apiVersion", "kind", "metadata", "spec"}) ||
+      !StringMember(root, "apiVersion", &api_version) ||
+      api_version != "simai.ground-truth/v1" ||
+      !StringMember(root, "kind", &kind) || kind != "GroundTruthRun" ||
+      metadata == nullptr ||
+      !ObjectHasExactKeys(*metadata, {"id", "generation", "frozen"}) ||
+      !StringMember(*metadata, "id", &id) || id.empty() ||
+      !StringMember(*metadata, "generation", &generation) ||
+      generation != "A2" || !BooleanMember(*metadata, "frozen", &frozen) ||
+      !frozen || spec == nullptr ||
+      !ObjectHasExactKeys(
+          *spec,
+          {"sourceIdentity", "runtimeIdentity", "model", "parallelism",
+           "rankTopology", "metricContract", "scenarios", "evidence"}) ||
+      source == nullptr ||
+      !ObjectHasExactKeys(
+          *source,
+          {"mindSpeedLlmCommit", "mindSpeedCommit", "megatronLmCommit"}) ||
+      !StringMember(*source, "mindSpeedLlmCommit", &llm_commit) ||
+      llm_commit != "2b7130ca7bea7083a91ed66812eec95067d057a2" ||
+      !StringMember(*source, "mindSpeedCommit", &mindspeed_commit) ||
+      mindspeed_commit != "81570f17ee091e783fa68428c04fa536da122dc1" ||
+      !StringMember(*source, "megatronLmCommit", &megatron_commit) ||
+      megatron_commit != "a845aa7e12b3a117e24c2352b9e3e60bad2e3a17" ||
+      runtime == nullptr ||
+      !ObjectHasExactKeys(
+          *runtime,
+          {"pythonVersion", "pytorchVersion", "torchNpuVersion",
+           "cannVersion", "driverVersion", "abiDigest"}) ||
+      !StringMember(*runtime, "pythonVersion", &python_version) ||
+      python_version != "3.10" ||
+      !StringMember(*runtime, "pytorchVersion", &pytorch_version) ||
+      pytorch_version != "2.7.1" ||
+      !StringMember(*runtime, "torchNpuVersion", &torch_npu_version) ||
+      torch_npu_version != "7.3.0" ||
+      !StringMember(*runtime, "cannVersion", &cann_version) ||
+      cann_version != "8.5.0" ||
+      !StringMember(*runtime, "driverVersion", &driver_version) ||
+      driver_version.empty() ||
+      !StringMember(*runtime, "abiDigest", &abi_digest) ||
+      !IsSha256Identifier(abi_digest) || model == nullptr ||
+      !ObjectHasExactKeys(
+          *model,
+          {"activeTransformerLayers", "routedExperts", "topK",
+           "expertIntermediateSize", "sharedExperts", "microBatchSequences"}) ||
+      !ExactPositiveIntMember(*model, "activeTransformerLayers", &active_layers) ||
+      active_layers != 4 ||
+      !ExactPositiveIntMember(*model, "routedExperts", &experts) ||
+      experts != 32 || !ExactPositiveIntMember(*model, "topK", &top_k) ||
+      top_k != 16 ||
+      !ExactPositiveIntMember(*model, "expertIntermediateSize", &expert_width) ||
+      expert_width != 3072 ||
+      !ExactPositiveIntMember(*model, "sharedExperts", &shared_experts) ||
+      shared_experts != 1 ||
+      !ExactPositiveIntMember(*model, "microBatchSequences", &mbs) || mbs != 1 ||
+      parallel == nullptr ||
+      !ObjectHasExactKeys(*parallel, {"tensor", "pipeline", "expert", "data"}) ||
+      !ExactPositiveIntMember(*parallel, "tensor", &tp) || tp != 1 ||
+      !ExactPositiveIntMember(*parallel, "pipeline", &pp) || pp != 2 ||
+      !ExactPositiveIntMember(*parallel, "expert", &ep) || ep != 4 ||
+      !ExactPositiveIntMember(*parallel, "data", &dp) || dp != 4 ||
+      topology == nullptr ||
+      !ObjectHasExactKeys(
+          *topology,
+          {"worldSize", "trainingRanksPerDevice", "rankMappingDigest"}) ||
+      !ExactPositiveIntMember(*topology, "worldSize", &world_size) ||
+      world_size != 8 ||
+      !ExactPositiveIntMember(
+          *topology, "trainingRanksPerDevice", &ranks_per_device) ||
+      ranks_per_device != 1 ||
+      !StringMember(*topology, "rankMappingDigest", &rank_mapping_digest) ||
+      !IsSha256Identifier(rank_mapping_digest) || metrics == nullptr ||
+      !ObjectHasExactKeys(
+          *metrics,
+          {"stepTimeUnit", "peakHbmUnit", "hcclTimeUnit", "warmupExcluded",
+           "initialSampleCount", "extendedSampleCount", "cvThreshold",
+           "highVariationStatistic", "hbmSafetyPercent", "hbmComparison"}) ||
+      !StringMember(*metrics, "stepTimeUnit", &step_unit) || step_unit != "ns" ||
+      !StringMember(*metrics, "peakHbmUnit", &hbm_unit) || hbm_unit != "B" ||
+      !StringMember(*metrics, "hcclTimeUnit", &hccl_unit) || hccl_unit != "ns" ||
+      !BooleanMember(*metrics, "warmupExcluded", &warmup_excluded) ||
+      !warmup_excluded ||
+      !ExactPositiveIntMember(*metrics, "initialSampleCount", &initial_samples) ||
+      initial_samples != 5 ||
+      !ExactPositiveIntMember(*metrics, "extendedSampleCount", &extended_samples) ||
+      extended_samples != 10 ||
+      !NumberMember(*metrics, "cvThreshold", &cv_threshold) ||
+      std::fabs(cv_threshold - 0.1) > 1e-12 ||
+      !StringMember(
+          *metrics, "highVariationStatistic", &high_variation_statistic) ||
+      high_variation_statistic != "LINEAR_TYPE7_P90" ||
+      !ExactPositiveIntMember(*metrics, "hbmSafetyPercent", &hbm_percent) ||
+      hbm_percent != 85 ||
+      !StringMember(*metrics, "hbmComparison", &hbm_comparison) ||
+      hbm_comparison != "STRICTLY_LESS_THAN" || scenarios == nullptr ||
+      scenarios->type != JsonValue::Type::Array || scenarios->array.size() != 3U ||
+      evidence == nullptr || !EvidenceRecordIsComplete(*evidence)) {
+    Reject(
+        contract,
+        "A2_GROUND_TRUTH_RUN_INVALID",
+        "The A2 GroundTruth Run does not match the frozen source, runtime, shape, topology, or metric contract.",
+        "Use the exact A2 reduced-MoE GroundTruth Run v1 contract.");
+    return false;
+  }
+  const std::array<std::string, 3> ids = {{
+      "A2-CAL-BALANCED", "A2-CAL-COMM", "A2-CAL-LONG"}};
+  const std::array<uint64_t, 3> sequences = {{2048U, 1024U, 4096U}};
+  const std::array<uint64_t, 3> batches = {{8U, 16U, 8U}};
+  const std::array<uint64_t, 3> accumulation = {{2U, 4U, 2U}};
+  const std::array<uint64_t, 3> tokens = {{16384U, 16384U, 32768U}};
+  for (size_t index = 0U; index < ids.size(); ++index) {
+    const JsonValue& scenario = scenarios->array[index];
+    std::string scenario_id;
+    uint64_t sequence = 0U;
+    uint64_t batch = 0U;
+    uint64_t ga = 0U;
+    uint64_t gts = 0U;
+    if (!ObjectHasExactKeys(
+            scenario,
+            {"id", "sequenceTokens", "globalBatchSequences",
+             "gradientAccumulation", "configuredGlobalTokens"}) ||
+        !StringMember(scenario, "id", &scenario_id) || scenario_id != ids[index] ||
+        !ExactPositiveUint64Member(scenario, "sequenceTokens", &sequence) ||
+        sequence != sequences[index] ||
+        !ExactPositiveUint64Member(scenario, "globalBatchSequences", &batch) ||
+        batch != batches[index] ||
+        !ExactPositiveUint64Member(scenario, "gradientAccumulation", &ga) ||
+        ga != accumulation[index] ||
+        !ExactPositiveUint64Member(
+            scenario, "configuredGlobalTokens", &gts) || gts != tokens[index] ||
+        batch != static_cast<uint64_t>(mbs * dp) * ga || gts != sequence * batch) {
+      Reject(
+          contract,
+          "A2_GROUND_TRUTH_SCENARIO_DRIFT",
+          "An A2 calibration scenario differs from the frozen sequence/GBS/GA/GTS contract.",
+          "Restore the three preregistered A2 calibration scenarios.");
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ValidateA2GroundTruth(
+    const JsonValue& envelope,
+    const JsonValue& manifest_root,
+    AnalyticalRunContract* contract) {
+  std::string schema_version;
+  const JsonValue* run_reference = Member(envelope, "run");
+  const JsonValue* result_reference = Member(envelope, "result");
+  if (!ObjectHasExactKeys(envelope, {"schema_version", "run", "result"}) ||
+      !StringMember(envelope, "schema_version", &schema_version) ||
+      schema_version != "simai.a2.calibration/v1" || run_reference == nullptr ||
+      result_reference == nullptr) {
+    Reject(
+        contract,
+        "A2_GROUND_TRUTH_ENVELOPE_INVALID",
+        "The A2 GroundTruth envelope is invalid.",
+        "Provide exact content-addressed GroundTruth Run and Result references.");
+    return false;
+  }
+  const ArtifactLoadPolicy run_policy = {
+      "A2_GROUND_TRUTH_RUN_REFERENCE_INVALID",
+      "The GroundTruth Run reference is invalid.",
+      "Provide path and SHA-256.",
+      "A2_GROUND_TRUTH_RUN_NOT_FOUND",
+      "The GroundTruth Run cannot be read.",
+      "Provide a readable sanitized GroundTruth Run.",
+      "A2_GROUND_TRUTH_RUN_DIGEST_MISMATCH",
+      "The GroundTruth Run digest does not match.",
+      "Use the intended immutable GroundTruth Run.",
+      "A2_GROUND_TRUTH_RUN_INVALID_JSON",
+      "The GroundTruth Run is not valid JSON.",
+      "Correct the GroundTruth Run JSON."};
+  const ArtifactLoadPolicy result_policy = {
+      "A2_GROUND_TRUTH_RESULT_REFERENCE_INVALID",
+      "The GroundTruth Result reference is invalid.",
+      "Provide path and SHA-256.",
+      "A2_GROUND_TRUTH_RESULT_NOT_FOUND",
+      "The GroundTruth Result cannot be read.",
+      "Provide a readable sanitized GroundTruth Result.",
+      "A2_GROUND_TRUTH_RESULT_DIGEST_MISMATCH",
+      "The GroundTruth Result digest does not match.",
+      "Use the intended immutable GroundTruth Result.",
+      "A2_GROUND_TRUTH_RESULT_INVALID_JSON",
+      "The GroundTruth Result is not valid JSON.",
+      "Correct the GroundTruth Result JSON."};
+  LoadedArtifact run;
+  LoadedArtifact result;
+  if (!LoadArtifact(
+          *run_reference,
+          run_policy,
+          contract,
+          &run,
+          256U * 1024U,
+          "A2_GROUND_TRUTH_RUN_TOO_LARGE",
+          "The GroundTruth Run exceeds 256 KiB.",
+          "Publish only the bounded sanitized contract.") ||
+      !LoadArtifact(
+          *result_reference,
+          result_policy,
+          contract,
+          &result,
+          512U * 1024U,
+          "A2_GROUND_TRUTH_RESULT_TOO_LARGE",
+          "The GroundTruth Result exceeds 512 KiB.",
+          "Publish bounded aggregate samples instead of raw host logs.")) {
+    return false;
+  }
+  contract->a2_ground_truth_run_sha256 = run.sha256;
+  contract->a2_ground_truth_result_sha256 = result.sha256;
+  if (!GroundTruthRunHasFrozenContract(run.document, contract)) {
+    return false;
+  }
+  const JsonValue* metadata = Member(result.document, "metadata");
+  const JsonValue* spec = Member(result.document, "spec");
+  const JsonValue* block = spec == nullptr ? nullptr : Member(*spec, "block");
+  const JsonValue* raw_observations = spec == nullptr
+      ? nullptr
+      : Member(*spec, "rawObservations");
+  const JsonValue* derived = spec == nullptr
+      ? nullptr
+      : Member(*spec, "derivedCostModel");
+  const JsonValue* scenarios = spec == nullptr
+      ? nullptr
+      : Member(*spec, "scenarios");
+  const JsonValue* evidence = spec == nullptr
+      ? nullptr
+      : Member(*spec, "evidence");
+  std::string api_version;
+  std::string kind;
+  std::string result_id;
+  std::string generation;
+  std::string run_digest;
+  std::string status;
+  std::string block_reason;
+  std::string block_remediation;
+  std::string evidence_class;
+  std::string evidence_readiness;
+  if (!ObjectHasExactKeys(
+          result.document, {"apiVersion", "kind", "metadata", "spec"}) ||
+      !StringMember(result.document, "apiVersion", &api_version) ||
+      api_version != "simai.ground-truth/v1" ||
+      !StringMember(result.document, "kind", &kind) ||
+      kind != "GroundTruthResult" || metadata == nullptr ||
+      !ObjectHasExactKeys(*metadata, {"id", "generation"}) ||
+      !StringMember(*metadata, "id", &result_id) || result_id.empty() ||
+      !StringMember(*metadata, "generation", &generation) || generation != "A2" ||
+      spec == nullptr ||
+      !ObjectHasExactKeys(
+          *spec,
+          {"groundTruthRunDigest", "status", "block", "rawObservations",
+           "derivedCostModel", "scenarios", "evidence"}) ||
+      !StringMember(*spec, "groundTruthRunDigest", &run_digest) ||
+      run_digest != run.sha256 || !StringMember(*spec, "status", &status) ||
+      block == nullptr ||
+      !ObjectHasExactKeys(*block, {"reason", "remediation"}) ||
+      !StringMember(*block, "reason", &block_reason) ||
+      !StringMember(*block, "remediation", &block_remediation) ||
+      raw_observations == nullptr ||
+      raw_observations->type != JsonValue::Type::Array || derived == nullptr ||
+      scenarios == nullptr || scenarios->type != JsonValue::Type::Array ||
+      evidence == nullptr ||
+      !EvidenceRecordIsComplete(*evidence) ||
+      !StringMember(*evidence, "class", &evidence_class) ||
+      !StringMember(*evidence, "readiness", &evidence_readiness)) {
+    Reject(
+        contract,
+        "A2_GROUND_TRUTH_RESULT_INVALID",
+        "The A2 GroundTruth Result schema or provenance is invalid.",
+        "Provide a complete sanitized GroundTruth Result bound to its Run.");
+    return false;
+  }
+  contract->a2_ground_truth_status = status;
+  contract->a2_ground_truth_evidence_level = evidence_class;
+  contract->a2_ground_truth_field_readiness = evidence_readiness;
+  if (status == "BLOCKED_ENV") {
+    const bool supported_block =
+        (block_reason == "A2_HCCL_ABI_UNAVAILABLE" &&
+         block_remediation ==
+             "Install the pinned CANN 8.5 HCCL runtime in the isolated lane.") ||
+        (block_reason == "A2_TORCH_NPU_IMPORT_FAILED" &&
+         block_remediation ==
+             "Install the pinned Python 3.10, PyTorch 2.7.1, and TorchNPU 7.3.0 lane.") ||
+        (block_reason == "A2_SOURCE_PIN_UNAVAILABLE" &&
+         block_remediation ==
+             "Provide clean checkouts of the three pinned training source revisions.") ||
+        (block_reason == "A2_RANK_TOPOLOGY_UNAVAILABLE" &&
+         block_remediation ==
+             "Restore eight complete A2 training ranks before sampling.");
+    if (!supported_block || !raw_observations->array.empty() ||
+        derived->type != JsonValue::Type::Null ||
+        !scenarios->array.empty()) {
+      Reject(
+          contract,
+          "A2_BLOCKED_ENV_RESULT_INVALID",
+          "A BLOCKED_ENV result must use a controlled reason, actionable remediation, and contain no observations or fitted model.",
+          "Remove samples and the model, then use the minimum remediation for the observed environment failure.");
+      return false;
+    }
+    contract->accepted = false;
+    contract->exit_code = 6;
+    contract->status = "BLOCKED_ENV";
+    contract->reject_code = block_reason.empty()
+        ? "A2_ENVIRONMENT_BLOCKED"
+        : block_reason;
+    contract->message = "The pinned A2 environment could not be established.";
+    contract->remediation = block_remediation;
+    return false;
+  }
+  if (status != "VALID" || block_reason != "NONE" ||
+      block_remediation != "NONE") {
+    RejectAccuracyExecution(
+        contract,
+        "A2_GROUND_TRUTH_EXECUTION_INVALID",
+        "The A2 GroundTruth Result is not eligible for calibration.",
+        "Rerun the frozen scenario after correcting its execution failure.");
+    return false;
+  }
+  if (raw_observations->array.empty() ||
+      derived->type != JsonValue::Type::Object) {
+    Reject(
+        contract,
+        "A2_GROUND_TRUTH_RESULT_INVALID",
+        "A valid A2 GroundTruth Result requires immutable observations and a DerivedCostModel.",
+        "Provide the complete observation set and its fitted model.");
+    return false;
+  }
+  std::vector<std::string> raw_digests;
+  for (const JsonValue& raw_reference : raw_observations->array) {
+    std::string raw_path;
+    std::string raw_digest;
+    std::string raw_content;
+    if (!ObjectHasExactKeys(raw_reference, {"path", "sha256"}) ||
+        !ParseArtifactReference(raw_reference, &raw_path, &raw_digest) ||
+        ReadFileWithMaximumBytes(raw_path, 256U * 1024U, &raw_content) !=
+            BoundedReadResult::Success) {
+      Reject(
+          contract,
+          "A2_RAW_OBSERVATION_INVALID",
+          "An A2 RawObservation reference is invalid or unreadable.",
+          "Provide bounded immutable RawObservation artifacts.");
+      return false;
+    }
+    if ("sha256:" + Sha256Hex(raw_content) != raw_digest) {
+      Reject(
+          contract,
+          "A2_RAW_OBSERVATION_DIGEST_MISMATCH",
+          "An A2 RawObservation digest does not match.",
+          "Use the immutable observation consumed by the DerivedCostModel.");
+      return false;
+    }
+    raw_digests.push_back(raw_digest);
+  }
+  std::string derived_path;
+  std::string derived_digest;
+  const JsonValue* manifest_model_reference =
+      Member(manifest_root, "collective_cost_model");
+  std::string manifest_model_path;
+  std::string manifest_model_digest;
+  if (!ObjectHasExactKeys(*derived, {"path", "sha256"}) ||
+      !ParseArtifactReference(*derived, &derived_path, &derived_digest) ||
+      manifest_model_reference == nullptr ||
+      !ParseArtifactReference(
+          *manifest_model_reference,
+          &manifest_model_path,
+          &manifest_model_digest) ||
+      derived_digest != manifest_model_digest) {
+    Reject(
+        contract,
+        "A2_DERIVED_MODEL_BINDING_MISMATCH",
+        "The A2 DerivedCostModel is not the model selected by this Analytical run.",
+        "Select the exact model derived from the declared RawObservations.");
+    return false;
+  }
+  std::string model_content;
+  JsonValue model_document;
+  if (ReadFileWithMaximumBytes(
+          derived_path, 512U * 1024U, &model_content) !=
+          BoundedReadResult::Success ||
+      "sha256:" + Sha256Hex(model_content) != derived_digest ||
+      !ParseJsonDocument(model_content, &model_document)) {
+    Reject(
+        contract,
+        "A2_DERIVED_MODEL_INVALID",
+        "The A2 DerivedCostModel cannot be verified.",
+        "Provide the bounded model matching its declared digest.");
+    return false;
+  }
+  const JsonValue* model_spec = Member(model_document, "spec");
+  const JsonValue* input_samples = model_spec == nullptr
+      ? nullptr
+      : Member(*model_spec, "inputSamples");
+  if (input_samples == nullptr || input_samples->type != JsonValue::Type::Array ||
+      input_samples->array.size() != raw_digests.size()) {
+    Reject(
+        contract,
+        "A2_DERIVED_MODEL_RAW_SET_MISMATCH",
+        "The DerivedCostModel raw input set differs from the GroundTruth Result.",
+        "Bind every and only the declared immutable RawObservations.");
+    return false;
+  }
+  for (size_t index = 0U; index < raw_digests.size(); ++index) {
+    std::string sample_digest;
+    if (!StringMember(input_samples->array[index], "sha256", &sample_digest) ||
+        sample_digest != raw_digests[index]) {
+      Reject(
+          contract,
+          "A2_DERIVED_MODEL_RAW_SET_MISMATCH",
+          "The DerivedCostModel raw input digest differs from the GroundTruth Result.",
+          "Regenerate the model from the exact observation set.");
+      return false;
+    }
+  }
+  const std::array<std::string, 3> ids = {{
+      "A2-CAL-BALANCED", "A2-CAL-COMM", "A2-CAL-LONG"}};
+  const std::array<uint64_t, 3> configured_tokens = {{16384U, 16384U, 32768U}};
+  if (scenarios->array.size() != ids.size()) {
+    Reject(
+        contract,
+        "A2_GROUND_TRUTH_SCENARIO_SET_INVALID",
+        "The GroundTruth Result must contain exactly three frozen scenarios.",
+        "Report balanced, communication-heavy, and long-sequence exactly once.");
+    return false;
+  }
+  contract->a2_scenarios.clear();
+  for (size_t index = 0U; index < ids.size(); ++index) {
+    const JsonValue& scenario = scenarios->array[index];
+    std::string id;
+    std::string execution_status;
+    std::vector<uint64_t> step_times;
+    std::vector<uint64_t> hbm_peaks;
+    uint64_t base_hbm = 0U;
+    int completed_ranks = 0;
+    int expected_ranks = 0;
+    bool loss_finite = false;
+    bool gradients_finite = false;
+    bool oom = false;
+    uint64_t configured = 0U;
+    uint64_t consumed = 0U;
+    uint64_t dropped = 0U;
+    uint64_t replayed = 0U;
+    std::string provenance_digest;
+    if (!ObjectHasExactKeys(
+            scenario,
+            {"id", "status", "stepTimeNs", "peakHbmB", "baseHbmB",
+             "completedRanks", "expectedRanks", "lossFinite",
+             "gradientsFinite", "oom", "configuredTokens", "consumedTokens",
+             "droppedTokens", "replayedTokens", "provenanceDigest"}) ||
+        !StringMember(scenario, "id", &id) || id != ids[index] ||
+        !StringMember(scenario, "status", &execution_status) ||
+        execution_status != "VALID" ||
+        !ParsePositiveUint64Array(scenario, "stepTimeNs", &step_times) ||
+        !ParsePositiveUint64Array(scenario, "peakHbmB", &hbm_peaks) ||
+        hbm_peaks.size() != step_times.size() ||
+        !ExactPositiveUint64Member(scenario, "baseHbmB", &base_hbm) ||
+        !ExactPositiveIntMember(scenario, "completedRanks", &completed_ranks) ||
+        !ExactPositiveIntMember(scenario, "expectedRanks", &expected_ranks) ||
+        !BooleanMember(scenario, "lossFinite", &loss_finite) ||
+        !BooleanMember(scenario, "gradientsFinite", &gradients_finite) ||
+        !BooleanMember(scenario, "oom", &oom) ||
+        !ExactPositiveUint64Member(scenario, "configuredTokens", &configured) ||
+        !ExactPositiveUint64Member(scenario, "consumedTokens", &consumed) ||
+        !ExactNonNegativeUint64Member(scenario, "droppedTokens", &dropped) ||
+        !ExactNonNegativeUint64Member(scenario, "replayedTokens", &replayed) ||
+        !StringMember(scenario, "provenanceDigest", &provenance_digest)) {
+      RejectAccuracyExecution(
+          contract,
+          "A2_GROUND_TRUTH_EXECUTION_INCOMPLETE",
+          "An A2 scenario is incomplete or malformed.",
+          "Repeat the frozen scenario with every required metric and rank.");
+      return false;
+    }
+    A2GroundTruthScenarioInput scenario_input;
+    scenario_input.id = id;
+    scenario_input.step_time_ns = step_times;
+    scenario_input.peak_hbm_B = hbm_peaks;
+    scenario_input.base_hbm_B = base_hbm;
+    scenario_input.completed_ranks = completed_ranks;
+    scenario_input.expected_ranks = expected_ranks;
+    scenario_input.loss_finite = loss_finite;
+    scenario_input.gradients_finite = gradients_finite;
+    scenario_input.oom = oom;
+    scenario_input.configured_tokens = configured;
+    scenario_input.consumed_tokens = consumed;
+    scenario_input.dropped_tokens = dropped;
+    scenario_input.replayed_tokens = replayed;
+    scenario_input.provenance_digest = provenance_digest;
+    const A2GroundTruthScenarioValidation validation =
+        ValidateA2GroundTruthScenario(
+            scenario_input, configured_tokens[index], run.sha256);
+    if (validation.classification ==
+        A2GroundTruthValidationClass::InvalidAccuracyExecution) {
+      RejectAccuracyExecution(
+          contract,
+          validation.reject_code,
+          validation.message,
+          validation.remediation);
+      return false;
+    }
+    if (validation.classification ==
+        A2GroundTruthValidationClass::InvalidInput) {
+      Reject(
+          contract,
+          validation.reject_code,
+          validation.message,
+          validation.remediation);
+      return false;
+    }
+    contract->a2_scenarios.push_back(validation.summary);
+  }
+  bool hardware_available = false;
+  const JsonValue* conditions = Member(*evidence, "conditions");
+  if (conditions != nullptr) {
+    BooleanMember(*conditions, "hardwareAvailable", &hardware_available);
+  }
+  contract->a2_calibration_eligible =
+      evidence_class == "MEASURED" &&
+      evidence_readiness == "FIELD_VERIFIED" && hardware_available;
+  contract->a2_derived_cost_model_sha256 = derived_digest;
+  contract->a2_raw_observation_count = static_cast<int>(raw_digests.size());
+  contract->a2_ground_truth_ready = true;
+  return true;
+}
+
 struct ValidatedAscendProfile {
   std::string id;
   int rank_count = 0;
@@ -4367,6 +4976,14 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
   }
   contract.workload_digest_verified = true;
 
+  const JsonValue* a2_ground_truth = Member(root, "a2_ground_truth");
+  contract.a2_ground_truth_present = a2_ground_truth != nullptr;
+  if (a2_ground_truth != nullptr &&
+      (a2_ground_truth->type != JsonValue::Type::Object ||
+       !ValidateA2GroundTruth(*a2_ground_truth, root, &contract))) {
+    return contract;
+  }
+
   const JsonValue* target_workload = Member(root, "target_workload");
   contract.target_workload_present = target_workload != nullptr;
   if (target_workload != nullptr) {
@@ -4412,6 +5029,15 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
   if (device_profile != nullptr) {
     if (!LoadAscendResources(root, *device_profile, &contract)) {
       return contract;
+    }
+    if (contract.a2_ground_truth_ready) {
+      contract.a2_calibration_eligible =
+          contract.a2_calibration_eligible &&
+          contract.profile_field_readiness == "FIELD_VERIFIED" &&
+          contract.raw_observation_evidence_level == "MEASURED" &&
+          contract.raw_observation_field_readiness == "FIELD_VERIFIED" &&
+          contract.cost_model_evidence_level == "DERIVED" &&
+          contract.cost_model_field_readiness == "FIELD_VERIFIED";
     }
     contract.accepted = true;
     contract.exit_code = 0;
@@ -4605,7 +5231,11 @@ bool WriteAnalyticalResultManifest(
          << "    \"target_memory_event_plan_sha256\": "
          << Quote(contract.target_memory_event_plan_sha256) << ",\n"
          << "    \"target_workload_sha256\": "
-         << Quote(contract.target_workload_sha256) << "\n"
+         << Quote(contract.target_workload_sha256) << ",\n"
+         << "    \"a2_ground_truth_run_sha256\": "
+         << Quote(contract.a2_ground_truth_run_sha256) << ",\n"
+         << "    \"a2_ground_truth_result_sha256\": "
+         << Quote(contract.a2_ground_truth_result_sha256) << "\n"
          << "  },\n"
          << "  \"evidence\": {\n"
          << "    \"workload\": {\"level\": "
@@ -4655,7 +5285,12 @@ bool WriteAnalyticalResultManifest(
          << ", \"digest\": "
          << Quote(contract.target_memory_event_plan_sha256)
          << ", \"readiness\": "
-         << Quote(contract.target_memory_field_readiness) << "}\n"
+         << Quote(contract.target_memory_field_readiness) << "},\n"
+         << "    \"a2_ground_truth\": {\"level\": "
+         << Quote(contract.a2_ground_truth_evidence_level)
+         << ", \"digest\": " << Quote(contract.a2_ground_truth_result_sha256)
+         << ", \"readiness\": "
+         << Quote(contract.a2_ground_truth_field_readiness) << "}\n"
          << "  },\n"
          << "  \"readiness\": {\n"
          << "    \"contract\": " << Quote(valid ? "READY" : "BLOCKED") << ",\n"
@@ -4720,6 +5355,11 @@ bool WriteAnalyticalResultManifest(
          << ",\n"
          << "    \"traffic\": "
          << Quote(valid && contract.ascend_profiled ? "READY" : "UNKNOWN")
+         << ",\n"
+         << "    \"a2_ground_truth\": "
+         << Quote(contract.a2_ground_truth_present
+                      ? (contract.a2_ground_truth_ready ? "READY" : "BLOCKED")
+                      : "NOT_REQUIRED")
          << "\n"
          << "  },\n"
          << "  \"results\": {\n"
@@ -4945,6 +5585,43 @@ bool WriteAnalyticalResultManifest(
     }
   } else {
     output << "\"UNKNOWN\",\n";
+  }
+  output << "    \"a2_ground_truth\": ";
+  if (contract.a2_ground_truth_present) {
+    output << "{\"status\": " << Quote(contract.a2_ground_truth_status)
+           << ", \"calibration_eligible\": "
+           << (contract.a2_calibration_eligible ? "true" : "false")
+           << ", \"evidence\": "
+           << Quote(contract.a2_ground_truth_evidence_level)
+           << ", \"raw_observation_count\": "
+           << contract.a2_raw_observation_count
+           << ", \"derived_cost_model_sha256\": "
+           << Quote(contract.a2_derived_cost_model_sha256)
+           << ", \"scenarios\": [";
+    for (size_t index = 0U; index < contract.a2_scenarios.size(); ++index) {
+      if (index != 0U) {
+        output << ", ";
+      }
+      const A2GroundTruthScenarioSummary& scenario =
+          contract.a2_scenarios[index];
+      output << "{\"id\": " << Quote(scenario.id)
+             << ", \"sample_count\": " << scenario.sample_count
+             << ", \"cv\": " << std::setprecision(17) << scenario.cv
+             << ", \"median_step_time_ns\": "
+             << scenario.median_step_time_ns
+             << ", \"minimum_step_time_ns\": "
+             << scenario.minimum_step_time_ns
+             << ", \"maximum_step_time_ns\": "
+             << scenario.maximum_step_time_ns
+             << ", \"representative_statistic\": "
+             << Quote(scenario.representative_statistic)
+             << ", \"representative_step_time_ns\": "
+             << scenario.representative_step_time_ns
+             << ", \"peak_hbm_B\": " << scenario.peak_hbm_B << "}";
+    }
+    output << "]},\n";
+  } else {
+    output << "\"NOT_REQUIRED\",\n";
   }
   output
          << "    \"useful_throughput_tokens_per_s\": \"UNKNOWN\",\n"

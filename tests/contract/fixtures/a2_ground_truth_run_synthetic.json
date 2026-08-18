@@ -1,0 +1,96 @@
+{
+  "apiVersion": "simai.ground-truth/v1",
+  "kind": "GroundTruthRun",
+  "metadata": {
+    "id": "test-only-a2-reduced-moe-v1",
+    "generation": "A2",
+    "frozen": true
+  },
+  "spec": {
+    "sourceIdentity": {
+      "mindSpeedLlmCommit": "2b7130ca7bea7083a91ed66812eec95067d057a2",
+      "mindSpeedCommit": "81570f17ee091e783fa68428c04fa536da122dc1",
+      "megatronLmCommit": "a845aa7e12b3a117e24c2352b9e3e60bad2e3a17"
+    },
+    "runtimeIdentity": {
+      "pythonVersion": "3.10",
+      "pytorchVersion": "2.7.1",
+      "torchNpuVersion": "7.3.0",
+      "cannVersion": "8.5.0",
+      "driverVersion": "25.3.test-only",
+      "abiDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "model": {
+      "activeTransformerLayers": 4,
+      "routedExperts": 32,
+      "topK": 16,
+      "expertIntermediateSize": 3072,
+      "sharedExperts": 1,
+      "microBatchSequences": 1
+    },
+    "parallelism": {
+      "tensor": 1,
+      "pipeline": 2,
+      "expert": 4,
+      "data": 4
+    },
+    "rankTopology": {
+      "worldSize": 8,
+      "trainingRanksPerDevice": 1,
+      "rankMappingDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "metricContract": {
+      "stepTimeUnit": "ns",
+      "peakHbmUnit": "B",
+      "hcclTimeUnit": "ns",
+      "warmupExcluded": true,
+      "initialSampleCount": 5,
+      "extendedSampleCount": 10,
+      "cvThreshold": 0.1,
+      "highVariationStatistic": "LINEAR_TYPE7_P90",
+      "hbmSafetyPercent": 85,
+      "hbmComparison": "STRICTLY_LESS_THAN"
+    },
+    "scenarios": [
+      {
+        "id": "A2-CAL-BALANCED",
+        "sequenceTokens": 2048,
+        "globalBatchSequences": 8,
+        "gradientAccumulation": 2,
+        "configuredGlobalTokens": 16384
+      },
+      {
+        "id": "A2-CAL-COMM",
+        "sequenceTokens": 1024,
+        "globalBatchSequences": 16,
+        "gradientAccumulation": 4,
+        "configuredGlobalTokens": 16384
+      },
+      {
+        "id": "A2-CAL-LONG",
+        "sequenceTokens": 4096,
+        "globalBatchSequences": 8,
+        "gradientAccumulation": 2,
+        "configuredGlobalTokens": 32768
+      }
+    ],
+    "evidence": {
+      "id": "test-only-frozen-contract",
+      "class": "USER_INPUT",
+      "readiness": "FIELD_UNVERIFIED",
+      "source": {
+        "uri": "fixture://issue-21/a2-ground-truth-run",
+        "ref": "test-only-v1"
+      },
+      "method": {
+        "name": "contract-fixture",
+        "version": "1"
+      },
+      "asOf": "2026-08-18T00:00:00+08:00",
+      "conditions": {
+        "hardwareAvailable": false
+      },
+      "sanitization": "test-only-synthetic-no-host-data"
+    }
+  }
+}

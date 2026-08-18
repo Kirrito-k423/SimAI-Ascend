@@ -74,6 +74,117 @@ class AnalyticalRunContractTest(unittest.TestCase):
             result = json.loads(result_path.read_text()) if result_path.exists() else None
         return completed, result, manifest_path
 
+    def run_a2_ground_truth_contract(self, mutate_manifest=None):
+        """Attach the frozen A2 GroundTruth Run/Result to a real process run."""
+        manifest = json.loads(
+            (FIXTURES / "minimal_ascend_allreduce_run.json").read_text()
+        )
+        manifest["a2_ground_truth"] = {
+            "schema_version": "simai.a2.calibration/v1",
+            "run": {
+                "path": "tests/contract/fixtures/a2_ground_truth_run_synthetic.json",
+                "sha256": "sha256:138b0c6a7311e2c1244106dd0e7db25a457dbce0ba3f42e4fb4a1bd872f4ee4b",
+            },
+            "result": {
+                "path": "tests/contract/fixtures/a2_ground_truth_result_synthetic.json",
+                "sha256": "sha256:8f6f3cb58f67d6643efe95b0d005ee03e62fe958428100906a5cce3eee990c1f",
+            },
+        }
+        if mutate_manifest is not None:
+            mutate_manifest(manifest)
+        with tempfile.TemporaryDirectory(prefix="simai-a2-ground-truth-") as temp_dir:
+            run_directory = self.prepare_run_directory(temp_dir)
+            manifest_path = run_directory / "run.json"
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+            result_path = run_directory / "result.json"
+            completed = subprocess.run(
+                [
+                    str(self.binary),
+                    "--run-manifest",
+                    str(manifest_path),
+                    "--result-manifest",
+                    str(result_path),
+                ],
+                cwd=run_directory,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+            result = json.loads(result_path.read_text())
+        return completed, result
+
+    def run_mutated_a2_ground_truth_contract(
+        self, *, mutate_run=None, mutate_result=None
+    ):
+        """Rebind GroundTruth Run/Result digests before a real process run."""
+        manifest = json.loads(
+            (FIXTURES / "minimal_ascend_allreduce_run.json").read_text()
+        )
+        ground_truth_run = json.loads(
+            (FIXTURES / "a2_ground_truth_run_synthetic.json").read_text()
+        )
+        ground_truth_result = json.loads(
+            (FIXTURES / "a2_ground_truth_result_synthetic.json").read_text()
+        )
+        if mutate_run is not None:
+            mutate_run(ground_truth_run)
+        with tempfile.TemporaryDirectory(prefix="simai-a2-ground-truth-") as temp_dir:
+            run_directory = self.prepare_run_directory(temp_dir)
+            ground_truth_run_path = run_directory / "ground-truth-run.json"
+            ground_truth_run_path.write_text(
+                json.dumps(ground_truth_run, indent=2) + "\n"
+            )
+            ground_truth_run_digest = "sha256:" + hashlib.sha256(
+                ground_truth_run_path.read_bytes()
+            ).hexdigest()
+            ground_truth_result["spec"][
+                "groundTruthRunDigest"
+            ] = ground_truth_run_digest
+            for scenario in ground_truth_result["spec"]["scenarios"]:
+                scenario["provenanceDigest"] = ground_truth_run_digest
+            if mutate_result is not None:
+                mutate_result(ground_truth_result, ground_truth_run_digest)
+            ground_truth_result_path = run_directory / "ground-truth-result.json"
+            ground_truth_result_path.write_text(
+                json.dumps(ground_truth_result, indent=2) + "\n"
+            )
+            ground_truth_result_digest = "sha256:" + hashlib.sha256(
+                ground_truth_result_path.read_bytes()
+            ).hexdigest()
+            manifest["a2_ground_truth"] = {
+                "schema_version": "simai.a2.calibration/v1",
+                "run": {
+                    "path": str(ground_truth_run_path),
+                    "sha256": ground_truth_run_digest,
+                },
+                "result": {
+                    "path": str(ground_truth_result_path),
+                    "sha256": ground_truth_result_digest,
+                },
+            }
+            manifest_path = run_directory / "run.json"
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+            result_path = run_directory / "result.json"
+            completed = subprocess.run(
+                [
+                    str(self.binary),
+                    "--run-manifest",
+                    str(manifest_path),
+                    "--result-manifest",
+                    str(result_path),
+                ],
+                cwd=run_directory,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+            result = json.loads(result_path.read_text())
+        return completed, result
+
     def run_mutated_ascend_contract(
         self, *, mutate_profile=None, mutate_model=None, mutate_raw=None
     ):
@@ -151,6 +262,223 @@ class AnalyticalRunContractTest(unittest.TestCase):
             )
             result = json.loads(result_path.read_text())
         return completed, result
+
+    def test_a2_ground_truth_statistics_and_model_are_consumed_by_real_process(self):
+        completed, result = self.run_a2_ground_truth_contract()
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(result["status"], "VALID")
+        calibration = result["results"]["a2_ground_truth"]
+        self.assertEqual(calibration["status"], "VALID")
+        self.assertFalse(calibration["calibration_eligible"])
+        self.assertEqual(calibration["evidence"], "USER_INPUT")
+        self.assertEqual(calibration["raw_observation_count"], 1)
+        self.assertEqual(
+            calibration["derived_cost_model_sha256"],
+            "sha256:aa3be631b9a360f499c87c01832184121dff71173951683c95b46c7d6c0398b8",
+        )
+        scenarios = {scenario["id"]: scenario for scenario in calibration["scenarios"]}
+        self.assertEqual(scenarios["A2-CAL-BALANCED"]["sample_count"], 5)
+        self.assertEqual(
+            scenarios["A2-CAL-BALANCED"]["representative_statistic"],
+            "MEDIAN",
+        )
+        self.assertEqual(
+            scenarios["A2-CAL-BALANCED"]["representative_step_time_ns"],
+            100000000,
+        )
+        self.assertEqual(scenarios["A2-CAL-COMM"]["sample_count"], 10)
+        self.assertEqual(
+            scenarios["A2-CAL-COMM"]["representative_statistic"],
+            "LINEAR_TYPE7_P90",
+        )
+        self.assertEqual(
+            scenarios["A2-CAL-COMM"]["representative_step_time_ns"],
+            141000000,
+        )
+        self.assertEqual(result["results"]["timing_ns"], 61943)
+
+    def test_a2_ground_truth_cv_rule_requires_exactly_five_or_ten_samples(self):
+        def mutate_short_result(document, _run_digest):
+            scenario = document["spec"]["scenarios"][0]
+            scenario["stepTimeNs"] = scenario["stepTimeNs"][:4]
+            scenario["peakHbmB"] = scenario["peakHbmB"][:4]
+
+        completed, result = self.run_mutated_a2_ground_truth_contract(
+            mutate_result=mutate_short_result
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(
+            result["reject_code"], "A2_GROUND_TRUTH_SAMPLE_COUNT_INVALID"
+        )
+
+        def mutate_result(document, _run_digest):
+            document["spec"]["scenarios"][1]["stepTimeNs"] = [
+                100000000,
+                101000000,
+                99000000,
+                100500000,
+                99500000,
+                100000000,
+                101000000,
+                99000000,
+                100500000,
+                99500000,
+            ]
+
+        completed, result = self.run_mutated_a2_ground_truth_contract(
+            mutate_result=mutate_result
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["status"], "INVALID_INPUT")
+        self.assertEqual(
+            result["reject_code"], "A2_GROUND_TRUTH_SAMPLE_RULE_VIOLATION"
+        )
+
+    def test_a2_invalid_accuracy_executions_never_enter_calibration(self):
+        def scenario(document):
+            return document["spec"]["scenarios"][0]
+
+        mutations = {
+            "oom": (
+                lambda document, _digest: scenario(document).__setitem__(
+                    "oom", True
+                ),
+                "A2_OOM",
+            ),
+            "hbm_at_85_percent": (
+                lambda document, _digest: scenario(document)[
+                    "peakHbmB"
+                ].__setitem__(0, 58411555226),
+                "A2_HBM_LIMIT_REACHED",
+            ),
+            "rank_loss": (
+                lambda document, _digest: scenario(document).__setitem__(
+                    "completedRanks", 7
+                ),
+                "A2_RANK_LOSS",
+            ),
+            "non_finite": (
+                lambda document, _digest: scenario(document).__setitem__(
+                    "lossFinite", False
+                ),
+                "A2_NON_FINITE",
+            ),
+            "token_loss": (
+                lambda document, _digest: scenario(document).__setitem__(
+                    "droppedTokens", 1
+                ),
+                "A2_TOKEN_LOSS",
+            ),
+            "token_replay": (
+                lambda document, _digest: scenario(document).__setitem__(
+                    "replayedTokens", 1
+                ),
+                "A2_TOKEN_REPLAY",
+            ),
+            "provenance_drift": (
+                lambda document, _digest: scenario(document).__setitem__(
+                    "provenanceDigest",
+                    "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                ),
+                "A2_PROVENANCE_DRIFT",
+            ),
+        }
+        for name, (mutation, expected_code) in mutations.items():
+            with self.subTest(name=name):
+                completed, result = self.run_mutated_a2_ground_truth_contract(
+                    mutate_result=mutation
+                )
+                self.assertEqual(completed.returncode, 5)
+                self.assertEqual(result["status"], "INVALID_ACCURACY_EXECUTION")
+                self.assertEqual(result["reject_code"], expected_code)
+                self.assertNotEqual(
+                    result["readiness"]["a2_ground_truth"], "READY"
+                )
+
+    def test_a2_blocked_environment_has_actionable_remediation_and_no_fit(self):
+        def mutate_result(document, _run_digest):
+            document["spec"]["status"] = "BLOCKED_ENV"
+            document["spec"]["block"] = {
+                "reason": "A2_HCCL_ABI_UNAVAILABLE",
+                "remediation": "Install the pinned CANN 8.5 HCCL runtime in the isolated lane.",
+            }
+            document["spec"]["rawObservations"] = []
+            document["spec"]["derivedCostModel"] = None
+            document["spec"]["scenarios"] = []
+
+        completed, result = self.run_mutated_a2_ground_truth_contract(
+            mutate_result=mutate_result
+        )
+
+        self.assertEqual(completed.returncode, 6)
+        self.assertEqual(result["status"], "BLOCKED_ENV")
+        self.assertEqual(result["reject_code"], "A2_HCCL_ABI_UNAVAILABLE")
+        self.assertIn("CANN 8.5 HCCL", result["remediation"])
+        self.assertEqual(result["results"]["timing_ns"], "UNKNOWN")
+        self.assertEqual(result["readiness"]["a2_ground_truth"], "BLOCKED")
+
+    def test_a2_source_identity_and_model_raw_digest_closure_fail_closed(self):
+        def drift_source(document):
+            document["spec"]["sourceIdentity"]["mindSpeedLlmCommit"] = "0" * 40
+
+        completed, result = self.run_mutated_a2_ground_truth_contract(
+            mutate_run=drift_source
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(result["reject_code"], "A2_GROUND_TRUTH_RUN_INVALID")
+
+        def drift_raw(document, _run_digest):
+            document["spec"]["rawObservations"][0]["sha256"] = (
+                "sha256:" + "d" * 64
+            )
+
+        completed, result = self.run_mutated_a2_ground_truth_contract(
+            mutate_result=drift_raw
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(
+            result["reject_code"], "A2_RAW_OBSERVATION_DIGEST_MISMATCH"
+        )
+
+        def drift_model(document, _run_digest):
+            document["spec"]["derivedCostModel"]["sha256"] = (
+                "sha256:" + "e" * 64
+            )
+
+        completed, result = self.run_mutated_a2_ground_truth_contract(
+            mutate_result=drift_model
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(
+            result["reject_code"], "A2_DERIVED_MODEL_BINDING_MISMATCH"
+        )
+
+    def test_a2_measured_claim_cannot_upgrade_unverified_raw_or_model_evidence(self):
+        def claim_measured(document, _run_digest):
+            evidence = document["spec"]["evidence"]
+            evidence["class"] = "MEASURED"
+            evidence["readiness"] = "FIELD_VERIFIED"
+            evidence["conditions"]["hardwareAvailable"] = True
+
+        completed, result = self.run_mutated_a2_ground_truth_contract(
+            mutate_result=claim_measured
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        calibration = result["results"]["a2_ground_truth"]
+        self.assertFalse(calibration["calibration_eligible"])
+        self.assertEqual(
+            result["evidence"]["raw_observation"]["readiness"],
+            "FIELD_UNVERIFIED",
+        )
+        self.assertEqual(
+            result["evidence"]["cost_model"]["readiness"],
+            "FIELD_UNVERIFIED",
+        )
 
     def run_mutated_target_contract(
         self,
