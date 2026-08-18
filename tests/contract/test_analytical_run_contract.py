@@ -638,6 +638,101 @@ class AnalyticalRunContractTest(unittest.TestCase):
             result["evidence"]["cost_model"]["readiness"], "FIELD_VERIFIED"
         )
 
+    def test_a2_profile_uses_consumed_evidence_not_unreferenced_first_record(self):
+        def poison_profile_evidence_order(document):
+            set_all_readiness(document, "FIELD_VERIFIED")
+            first = document["spec"]["evidence"][0]
+            first["class"] = "MEASURED"
+            first["readiness"] = "FIELD_VERIFIED"
+            first["conditions"]["hardwareAvailable"] = True
+            referenced = copy.deepcopy(first)
+            referenced["id"] = "a2-profile-referenced-user-input"
+            referenced["class"] = "USER_INPUT"
+            referenced["readiness"] = "FIELD_UNVERIFIED"
+            referenced["source"]["ref"] = "test-only-referenced-user-input"
+            referenced["conditions"]["hardwareAvailable"] = False
+            document["spec"]["evidence"].append(referenced)
+
+            def bind_consumed_fields(value):
+                if isinstance(value, dict):
+                    for key, child in value.items():
+                        if key == "evidenceRef":
+                            value[key] = referenced["id"]
+                        else:
+                            bind_consumed_fields(child)
+                elif isinstance(value, list):
+                    for child in value:
+                        bind_consumed_fields(child)
+
+            for key in (
+                "identity",
+                "rankGranularity",
+                "compute",
+                "memory",
+                "topology",
+            ):
+                bind_consumed_fields(document["spec"][key])
+
+        def verify_raw(document):
+            set_all_readiness(document, "FIELD_VERIFIED")
+            document["spec"]["evidenceClass"] = "MEASURED"
+            evidence = document["spec"]["evidence"][0]
+            evidence["class"] = "MEASURED"
+            evidence["conditions"]["hardwareAvailable"] = True
+
+        def verify_model(document):
+            set_all_readiness(document, "FIELD_VERIFIED")
+            document["spec"]["evidence"][0]["conditions"][
+                "hardwareAvailable"
+            ] = True
+
+        def verify_run(document):
+            evidence = document["spec"]["evidence"]
+            evidence["readiness"] = "FIELD_VERIFIED"
+            evidence["conditions"]["hardwareAvailable"] = True
+
+        def verify_result(document, _run_digest):
+            evidence = document["spec"]["evidence"]
+            evidence["class"] = "MEASURED"
+            evidence["readiness"] = "FIELD_VERIFIED"
+            evidence["conditions"]["hardwareAvailable"] = True
+
+        completed, result = self.run_mutated_a2_ground_truth_contract(
+            mutate_profile=poison_profile_evidence_order,
+            mutate_raw=verify_raw,
+            mutate_model=verify_model,
+            mutate_run=verify_run,
+            mutate_result=verify_result,
+        )
+
+        self.assertEqual(completed.returncode, 2, completed.stderr)
+        self.assertFalse(
+            result.get("results", {})
+            .get("a2_ground_truth", {})
+            .get("calibration_eligible", False)
+        )
+        self.assertEqual(
+            result["reject_code"], "DEVICE_PROFILE_FIELD_EVIDENCE_INVALID"
+        )
+
+    def test_a2_profile_v02_evidence_index_rejects_unknown_keys(self):
+        def add_unknown_evidence_key(document):
+            document["spec"]["evidence"][0]["unexpectedRawHostLog"] = True
+
+        def add_unknown_source_key(document):
+            document["spec"]["evidence"][0]["source"]["unexpectedHost"] = True
+
+        for mutation in (add_unknown_evidence_key, add_unknown_source_key):
+            with self.subTest(mutation=mutation.__name__):
+                completed, result = self.run_mutated_a2_ground_truth_contract(
+                    mutate_profile=mutation
+                )
+                self.assertEqual(completed.returncode, 2, completed.stderr)
+                self.assertEqual(
+                    result["reject_code"],
+                    "DEVICE_PROFILE_FIELD_EVIDENCE_INVALID",
+                )
+
     def test_a2_raw_group_identity_must_match_model_and_run(self):
         def drift_raw(document):
             document["spec"]["group"]["id"] = "wrong-ep-group"
@@ -803,6 +898,14 @@ class AnalyticalRunContractTest(unittest.TestCase):
         self.assertNotEqual(compiled.returncode, 0)
         self.assertIn("narrow", compiled.stderr.lower())
         self.assertIsNone(executed)
+
+    def test_a2_type7_p90_preserves_uint64_maximum(self):
+        compiled, executed = self.run_a2_typed_test(
+            "a2_ground_truth_type7_uint64_test.cc"
+        )
+        self.assertEqual(compiled.returncode, 0, compiled.stderr)
+        self.assertIsNotNone(executed)
+        self.assertEqual(executed.returncode, 0, executed.stderr)
 
     def run_mutated_target_contract(
         self,

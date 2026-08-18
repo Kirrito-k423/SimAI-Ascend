@@ -6,7 +6,7 @@
     "generation": "A2"
   },
   "spec": {
-    "groundTruthRunDigest": "sha256:3315f95d46353aa6a436f5475ac779a996df32aeab4ac5fa2ff71b08a794ef29",
+    "groundTruthRunDigest": "sha256:1aed6affdc6eb2015a04a2e85e8d32884c6d6ed4d572e24d5330e48fc04504c0",
     "status": "VALID",
     "block": {
       "reason": "NONE",
@@ -15,17 +15,17 @@
     "rawObservations": [
       {
         "path": "tests/contract/fixtures/a2_hccl_ep4_observation_synthetic.json",
-        "sha256": "sha256:925d27096d8d86c6f4d0fcac168acbbcbd4959c75ccd3415219faada7db34fa8"
+        "sha256": "sha256:a03806bfc134d87f83d78baca1fa47ec65cf0dd78bfc229b610d940ca83532b8"
       }
     ],
     "derivedCostModel": {
       "path": "tests/contract/fixtures/a2_hccl_ep4_cost_model_synthetic.json",
-      "sha256": "sha256:b2bb7f8d74cc536a819ee7474758636cd14353c5a60468c1a9dae25332580f90"
+      "sha256": "sha256:ee937a211ef8336a743eab0476ccabe87616ac66de09520171d8ed39c84e0013"
     },
     "bindings": {
       "profile": {
         "id": "test-only-a2-world8-profile",
-        "sha256": "sha256:ea5be8ae5b10058f23f5347ceb511d699b1f54b63133ea96e6a16ec41477291e",
+        "sha256": "sha256:ed850f7dea0b67bb341f33bfa0ce714f78a9fe57bce88da2eeb5acc740f1691b",
         "evidenceClass": "USER_INPUT",
         "readiness": "FIELD_UNVERIFIED",
         "evidenceRef": "a2-profile-input"
@@ -62,7 +62,7 @@
         "consumedTokens": 16384,
         "droppedTokens": 0,
         "replayedTokens": 0,
-        "provenanceDigest": "sha256:3315f95d46353aa6a436f5475ac779a996df32aeab4ac5fa2ff71b08a794ef29"
+        "provenanceDigest": "sha256:1aed6affdc6eb2015a04a2e85e8d32884c6d6ed4d572e24d5330e48fc04504c0"
       },
       {
         "id": "A2-CAL-COMM",
@@ -79,7 +79,7 @@
         "consumedTokens": 16384,
         "droppedTokens": 0,
         "replayedTokens": 0,
-        "provenanceDigest": "sha256:3315f95d46353aa6a436f5475ac779a996df32aeab4ac5fa2ff71b08a794ef29"
+        "provenanceDigest": "sha256:1aed6affdc6eb2015a04a2e85e8d32884c6d6ed4d572e24d5330e48fc04504c0"
       },
       {
         "id": "A2-CAL-LONG",
@@ -96,7 +96,7 @@
         "consumedTokens": 32768,
         "droppedTokens": 0,
         "replayedTokens": 0,
-        "provenanceDigest": "sha256:3315f95d46353aa6a436f5475ac779a996df32aeab4ac5fa2ff71b08a794ef29"
+        "provenanceDigest": "sha256:1aed6affdc6eb2015a04a2e85e8d32884c6d6ed4d572e24d5330e48fc04504c0"
       }
     ],
     "evidenceRef": "test-only-synthetic-result",

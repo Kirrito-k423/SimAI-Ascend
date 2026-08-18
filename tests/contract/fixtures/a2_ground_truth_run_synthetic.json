@@ -42,7 +42,7 @@
     "bindings": {
       "profile": {
         "id": "test-only-a2-world8-profile",
-        "sha256": "sha256:ea5be8ae5b10058f23f5347ceb511d699b1f54b63133ea96e6a16ec41477291e",
+          "sha256": "sha256:ed850f7dea0b67bb341f33bfa0ce714f78a9fe57bce88da2eeb5acc740f1691b",
         "evidenceClass": "USER_INPUT",
         "readiness": "FIELD_UNVERIFIED",
         "evidenceRef": "a2-profile-input"

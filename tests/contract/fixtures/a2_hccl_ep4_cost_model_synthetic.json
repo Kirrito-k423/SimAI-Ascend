@@ -6,7 +6,7 @@
     "id": "test-only-a2-ep4-alpha-beta"
   },
   "spec": {
-    "profileDigest": "sha256:ea5be8ae5b10058f23f5347ceb511d699b1f54b63133ea96e6a16ec41477291e",
+    "profileDigest": "sha256:ed850f7dea0b67bb341f33bfa0ce714f78a9fe57bce88da2eeb5acc740f1691b",
     "collective": "ALL_REDUCE",
     "dtype": "BF16",
     "reduction": "SUM",
@@ -33,7 +33,7 @@
       {
         "id": "test-only-a2-ep4-ar-1mib",
         "path": "tests/contract/fixtures/a2_hccl_ep4_observation_synthetic.json",
-        "sha256": "sha256:925d27096d8d86c6f4d0fcac168acbbcbd4959c75ccd3415219faada7db34fa8"
+        "sha256": "sha256:a03806bfc134d87f83d78baca1fa47ec65cf0dd78bfc229b610d940ca83532b8"
       }
     ],
     "fit": {

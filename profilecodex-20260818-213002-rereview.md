@@ -20,3 +20,12 @@
 - unverified synthetic 链保持 `calibration_eligible=false`；完整 verified 合同链真实进程正例已得到 `true`。
 - 105 项真实进程回归、独立 digest/membership oracle、JSON/determinism/sensitive/scope 检查均通过。
 - 远端环境结论未变化：仍为 `BLOCKED_ENV`，本轮没有重新探测、训练或采样。
+
+## Final residual fix audit
+
+- `fix_started`: `2026-08-18T21:57:05+0800`
+- `fix_finished`: `2026-08-18T22:15:27+0800`
+- `wall_seconds`: `1102`（18 分 22 秒，未超过 20 分钟，无需新增 profile fallback）
+- `token_snapshot`: `N/A`（当前执行环境未提供可验证的 token 用量快照）
+- `scope`: Profile consumed-evidence exact gate 与 Type-7 `uint64_t` 插值两个最终残余；未连接远端或执行 NPU 操作。
+- `verification`: strict 双模块、62-source 链接、108 项全 suite、独立 digest/membership/Profile oracle、敏感与范围扫描均通过。

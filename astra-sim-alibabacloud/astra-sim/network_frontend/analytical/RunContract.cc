@@ -17,6 +17,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -997,9 +998,16 @@ bool A2BindingsEqual(
       left.group_membership_sha256 == right.group_membership_sha256;
 }
 
-bool BuildEvidenceClassIndex(
+struct ProfileEvidenceRecord {
+  std::string evidence_class;
+  std::string readiness;
+  bool hardware_available = false;
+};
+
+bool BuildProfileEvidenceIndex(
     const JsonValue& spec,
-    std::map<std::string, std::string>* evidence_classes) {
+    bool exact_v02,
+    std::map<std::string, ProfileEvidenceRecord>* evidence_records) {
   const JsonValue* records = Member(spec, "evidence");
   if (records == nullptr || records->type != JsonValue::Type::Array ||
       records->array.empty()) {
@@ -1008,59 +1016,81 @@ bool BuildEvidenceClassIndex(
   for (const JsonValue& record : records->array) {
     std::string id;
     std::string evidence_class;
-    if (!EvidenceRecordIsComplete(record) ||
-        !StringMember(record, "id", &id) ||
-        !StringMember(record, "class", &evidence_class) ||
-        evidence_classes->count(id) != 0U) {
+    std::string readiness = "FIELD_UNVERIFIED";
+    bool hardware_available = false;
+    const JsonValue* conditions = Member(record, "conditions");
+    const bool record_valid = exact_v02
+        ? A2EvidenceRecordIsExact(
+              record,
+              &id,
+              &evidence_class,
+              &readiness,
+              &hardware_available)
+        : EvidenceRecordIsComplete(record) &&
+            StringMember(record, "id", &id) &&
+            StringMember(record, "class", &evidence_class) &&
+            conditions != nullptr &&
+            BooleanMember(
+                *conditions, "hardwareAvailable", &hardware_available);
+    if (!record_valid || id.empty() || evidence_records->count(id) != 0U) {
       return false;
     }
-    (*evidence_classes)[id] = evidence_class;
+    (*evidence_records)[id] = {
+        evidence_class, readiness, hardware_available};
   }
+  return true;
+}
+
+bool ConsumedEvidenceIsValid(
+    const JsonValue& field,
+    bool exact_v02,
+    const std::map<std::string, ProfileEvidenceRecord>& evidence_records,
+    bool* has_unverified_field,
+    std::set<std::string>* referenced_evidence) {
+  std::string evidence_ref;
+  std::string readiness;
+  if (!StringMember(field, "evidenceRef", &evidence_ref) ||
+      !StringMember(field, "readiness", &readiness) ||
+      (readiness != "FIELD_UNVERIFIED" && readiness != "FIELD_VERIFIED")) {
+    return false;
+  }
+  const auto evidence = evidence_records.find(evidence_ref);
+  if (evidence == evidence_records.end()) {
+    return false;
+  }
+  if (exact_v02 &&
+      (readiness != evidence->second.readiness ||
+       (readiness == "FIELD_VERIFIED" &&
+        (evidence->second.evidence_class != "MEASURED" ||
+         !evidence->second.hardware_available)))) {
+    return false;
+  }
+  if (!exact_v02 && readiness == "FIELD_UNVERIFIED" &&
+      evidence->second.evidence_class == "MEASURED") {
+    return false;
+  }
+  *has_unverified_field =
+      *has_unverified_field || readiness == "FIELD_UNVERIFIED";
+  referenced_evidence->insert(evidence_ref);
   return true;
 }
 
 bool ConsumedFieldEvidenceIsValid(
     const JsonValue& field,
-    const std::map<std::string, std::string>& evidence_classes,
-    bool* has_unverified_field) {
+    bool exact_v02,
+    const std::map<std::string, ProfileEvidenceRecord>& evidence_records,
+    bool* has_unverified_field,
+    std::set<std::string>* referenced_evidence) {
   std::string status;
-  std::string evidence_ref;
-  std::string readiness;
-  if (!StringMember(field, "status", &status) || status != "KNOWN" ||
-      !StringMember(field, "evidenceRef", &evidence_ref) ||
-      !StringMember(field, "readiness", &readiness) ||
-      (readiness != "FIELD_UNVERIFIED" && readiness != "FIELD_VERIFIED")) {
+  if (!StringMember(field, "status", &status) || status != "KNOWN") {
     return false;
   }
-  const auto evidence = evidence_classes.find(evidence_ref);
-  if (evidence == evidence_classes.end() ||
-      (readiness == "FIELD_UNVERIFIED" && evidence->second == "MEASURED")) {
-    return false;
-  }
-  *has_unverified_field =
-      *has_unverified_field || readiness == "FIELD_UNVERIFIED";
-  return true;
-}
-
-bool ConsumedTopologyEvidenceIsValid(
-    const JsonValue& topology_level,
-    const std::map<std::string, std::string>& evidence_classes,
-    bool* has_unverified_field) {
-  std::string evidence_ref;
-  std::string readiness;
-  if (!StringMember(topology_level, "evidenceRef", &evidence_ref) ||
-      !StringMember(topology_level, "readiness", &readiness) ||
-      (readiness != "FIELD_UNVERIFIED" && readiness != "FIELD_VERIFIED")) {
-    return false;
-  }
-  const auto evidence = evidence_classes.find(evidence_ref);
-  if (evidence == evidence_classes.end() ||
-      (readiness == "FIELD_UNVERIFIED" && evidence->second == "MEASURED")) {
-    return false;
-  }
-  *has_unverified_field =
-      *has_unverified_field || readiness == "FIELD_UNVERIFIED";
-  return true;
+  return ConsumedEvidenceIsValid(
+      field,
+      exact_v02,
+      evidence_records,
+      has_unverified_field,
+      referenced_evidence);
 }
 
 bool PositiveIntMember(
@@ -1137,6 +1167,7 @@ void Reject(
   contract->reject_code = reject_code;
   contract->message = message;
   contract->remediation = remediation;
+  contract->a2_calibration_eligible = false;
 }
 
 void RejectUnsupported(
@@ -3771,11 +3802,6 @@ bool ValidateAscendProfile(
       spec == nullptr ? nullptr : Member(*spec, "topology");
   const JsonValue* topology_level =
       topology == nullptr ? nullptr : FirstArrayObject(*topology, "levels");
-  const JsonValue* first_evidence =
-      spec == nullptr ? nullptr : FirstArrayObject(*spec, "evidence");
-  const JsonValue* first_evidence_conditions = first_evidence == nullptr
-      ? nullptr
-      : Member(*first_evidence, "conditions");
 
   if (spec != nullptr && topology_level == nullptr) {
     RejectUnsupported(
@@ -3807,7 +3833,8 @@ bool ValidateAscendProfile(
       !StringMember(profile, "kind", &kind) ||
       kind != "AscendHardwareProfile" ||
       !StringMember(profile, "schemaSemver", &schema_semver) ||
-      schema_semver != "0.1.0" || metadata == nullptr ||
+      (schema_semver != "0.1.0" && schema_semver != "0.2.0") ||
+      metadata == nullptr ||
       !StringMember(*metadata, "id", &validated->id) ||
       validated->id.empty() || spec == nullptr ||
       !StringMember(*spec, "status", &status) ||
@@ -3852,17 +3879,7 @@ bool ValidateAscendProfile(
           *topology_level,
           "topologyDigest",
           &validated->topology_digest) ||
-      !IsSha256Identifier(validated->topology_digest) ||
-      first_evidence == nullptr ||
-      !StringMember(
-          *first_evidence, "class", &validated->evidence_level) ||
-      !StringMember(*first_evidence, "id", &validated->evidence_ref) ||
-      validated->evidence_ref.empty() || first_evidence_conditions == nullptr ||
-      !BooleanMember(
-          *first_evidence_conditions,
-          "hardwareAvailable",
-          &validated->hardware_available) ||
-      !EvidenceRecordIsComplete(*first_evidence)) {
+      !IsSha256Identifier(validated->topology_digest)) {
     Reject(
         contract,
         "DEVICE_PROFILE_SCHEMA_INVALID",
@@ -3871,23 +3888,54 @@ bool ValidateAscendProfile(
     return false;
   }
 
-  std::map<std::string, std::string> evidence_classes;
+  const bool exact_v02 = schema_semver == "0.2.0";
+  std::map<std::string, ProfileEvidenceRecord> evidence_records;
+  std::set<std::string> referenced_evidence;
   bool has_unverified_field = false;
-  if (!BuildEvidenceClassIndex(*spec, &evidence_classes) ||
+  if (!BuildProfileEvidenceIndex(*spec, exact_v02, &evidence_records) ||
       !ConsumedFieldEvidenceIsValid(
-          *physical_chip_count, evidence_classes, &has_unverified_field) ||
+          *physical_chip_count,
+          exact_v02,
+          evidence_records,
+          &has_unverified_field,
+          &referenced_evidence) ||
       !ConsumedFieldEvidenceIsValid(
-          *management_device_count, evidence_classes, &has_unverified_field) ||
+          *management_device_count,
+          exact_v02,
+          evidence_records,
+          &has_unverified_field,
+          &referenced_evidence) ||
       !ConsumedFieldEvidenceIsValid(
-          *ranks_per_unit, evidence_classes, &has_unverified_field) ||
+          *ranks_per_unit,
+          exact_v02,
+          evidence_records,
+          &has_unverified_field,
+          &referenced_evidence) ||
       !ConsumedFieldEvidenceIsValid(
-          *peak_flops, evidence_classes, &has_unverified_field) ||
+          *peak_flops,
+          exact_v02,
+          evidence_records,
+          &has_unverified_field,
+          &referenced_evidence) ||
       !ConsumedFieldEvidenceIsValid(
-          *hbm_capacity, evidence_classes, &has_unverified_field) ||
+          *hbm_capacity,
+          exact_v02,
+          evidence_records,
+          &has_unverified_field,
+          &referenced_evidence) ||
       !ConsumedFieldEvidenceIsValid(
-          *hbm_bandwidth, evidence_classes, &has_unverified_field) ||
-      !ConsumedTopologyEvidenceIsValid(
-          *topology_level, evidence_classes, &has_unverified_field)) {
+          *hbm_bandwidth,
+          exact_v02,
+          evidence_records,
+          &has_unverified_field,
+          &referenced_evidence) ||
+      !ConsumedEvidenceIsValid(
+          *topology_level,
+          exact_v02,
+          evidence_records,
+          &has_unverified_field,
+          &referenced_evidence) ||
+      referenced_evidence.empty()) {
     Reject(
         contract,
         "DEVICE_PROFILE_FIELD_EVIDENCE_INVALID",
@@ -3897,6 +3945,21 @@ bool ValidateAscendProfile(
   }
   validated->field_readiness =
       has_unverified_field ? "FIELD_UNVERIFIED" : "FIELD_VERIFIED";
+  bool all_measured = true;
+  bool all_user_input = true;
+  validated->hardware_available = true;
+  for (const std::string& evidence_ref : referenced_evidence) {
+    const ProfileEvidenceRecord& evidence = evidence_records.at(evidence_ref);
+    all_measured = all_measured && evidence.evidence_class == "MEASURED";
+    all_user_input =
+        all_user_input && evidence.evidence_class == "USER_INPUT";
+    validated->hardware_available =
+        validated->hardware_available && evidence.hardware_available;
+  }
+  validated->evidence_level = all_measured
+      ? "MEASURED"
+      : (all_user_input ? "USER_INPUT" : "MIXED");
+  validated->evidence_ref = *referenced_evidence.begin();
   return true;
 }
 

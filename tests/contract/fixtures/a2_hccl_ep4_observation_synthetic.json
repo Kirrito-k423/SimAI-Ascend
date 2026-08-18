@@ -7,7 +7,7 @@
   },
   "spec": {
     "profileRef": "test-only-a2-world8-profile",
-    "profileDigest": "sha256:ea5be8ae5b10058f23f5347ceb511d699b1f54b63133ea96e6a16ec41477291e",
+    "profileDigest": "sha256:ed850f7dea0b67bb341f33bfa0ce714f78a9fe57bce88da2eeb5acc740f1691b",
     "collective": "ALL_REDUCE",
     "group": {
       "id": "a2-ep-stage-0",

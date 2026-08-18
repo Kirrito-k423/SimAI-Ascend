@@ -51,14 +51,19 @@ bool HbmLimitReached(uint64_t peak_hbm_B, uint64_t base_hbm_B) {
 
 uint64_t LinearType7P90(std::vector<uint64_t> sorted) {
   std::sort(sorted.begin(), sorted.end());
-  const long double position =
-      static_cast<long double>(sorted.size() - 1U) * 0.9L;
-  const size_t lower = static_cast<size_t>(std::floor(position));
+  // Type-7 uses h=(n-1)*9/10. Keep both the position and interpolation
+  // integral so the complete uint64_t nanosecond domain remains representable.
+  const size_t position_numerator = (sorted.size() - 1U) * 9U;
+  const size_t lower = position_numerator / 10U;
   const size_t upper = std::min(lower + 1U, sorted.size() - 1U);
-  const long double fraction = position - static_cast<long double>(lower);
-  return static_cast<uint64_t>(std::llround(
-      static_cast<long double>(sorted[lower]) +
-      fraction * static_cast<long double>(sorted[upper] - sorted[lower])));
+  const uint64_t fraction_numerator = position_numerator % 10U;
+  const uint64_t delta = sorted[upper] - sorted[lower];
+  const uint64_t delta_quotient = delta / 10U;
+  const uint64_t delta_remainder = delta % 10U;
+  const uint64_t rounded_increment =
+      delta_quotient * fraction_numerator +
+      (delta_remainder * fraction_numerator + 5U) / 10U;
+  return sorted[lower] + rounded_increment;
 }
 
 A2GroundTruthScenarioValidation InvalidAccuracy(

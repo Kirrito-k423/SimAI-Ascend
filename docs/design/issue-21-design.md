@@ -77,8 +77,11 @@ classDiagram
   负责 5/10 样本规则、样本 CV、中位数、Type-7 P90、峰值 HBM 与异常分类。
 - `RunContract.h/.cc`：执行有界 JSON 解析、精确 schema、SHA-256、引用闭包、证据/
   readiness、Profile/workload/topology/HCCL subgroup 语义闭包和 Analytical 模型重读；
-  输出结构化结果。A2 v0.2 raw/model schema 对根对象及受控嵌套对象都执行 exact-key、
-  type 与 enum 校验。
+  输出结构化结果。A2 v0.2 Profile evidence index 与 raw/model schema 对根对象及受控
+  嵌套对象都执行 exact-key、type 与 enum 校验。Profile 的每个 consumed field/topology
+  引用都唯一解析到完整 evidence record；`FIELD_VERIFIED` 只接受
+  `MEASURED/FIELD_VERIFIED/hardwareAvailable=true`，整体证据属性从实际被引用集合聚合，
+  不读取未引用首记录作为捷径。
 - `tests/contract/fixtures/a2_ground_truth_*_synthetic.json`：三场景冻结合同，合同级
   evidence 为 `USER_INPUT/FIELD_UNVERIFIED` 且 `hardwareAvailable=false`，因此三个场景
   均继承 FIELD_UNVERIFIED，绝不升级真实远端 readiness。
@@ -165,6 +168,8 @@ readiness 不会升级。
 - step time 与 HCCL observation 使用 `ns`，peak/base HBM 使用 `B`，warmup 排除。
 - 初始恰好 5 次；前 5 次样本 CV > 0.10 时必须扩到恰好 10 次，否则保持 5 次。
 - 高变异代表值采用线性插值 Type-7 P90；其余采用中位数。
+- Type-7 P90 的位置固定为 `(n-1)*9/10`，以 quotient/remainder 的 `uint64_t` 有理数
+  插值及整数舍入实现；不经过 `long long`/`llround`，包括 `UINT64_MAX` 仍保持精确。
 - peak HBM 达到 base HBM 的 85% 即无效；typed 层以 quotient/remainder 计算
   `ceil(base_hbm_B * 17 / 20)`，不执行可能溢出的乘法，覆盖 `UINT64_MAX` 边界。
 - 数组必须是完整的 5 或 10 组配对样本；拒绝零值、非整数、越界、重复键、未知键、
@@ -203,12 +208,13 @@ digest 闭合时才允许 calibration eligible。synthetic 的 VALID 只表示�
 | ADR-0006：A2/A3 来源字段 | 三源码 commit + runtime/driver/ABI | frozen contract exact-schema 测试 |
 | ADR-0007：统一校准语义 | 固定单位、上限、稳定状态码 | invalid、bounds、unit 测试 |
 | ADR-0008：不可越过门禁 | 五类 evidence 的 FIELD_VERIFIED 链路才可 eligible | verified 正例与 synthetic 不升级 readiness 真实进程测试 |
+| Profile evidence 解析 | v0.2 exact index；聚合实际 consumed refs | 未引用首记录攻击、evidence/source unknown-key 真实进程测试 |
 | 三场景冻结 | 精确 ID/sequence/GBS/GA/GTS 与 4/E32/TopK16/3072 | full real-process contract 测试 |
-| 5/10 + CV + Type-7 P90 | typed statistics module | 5/10 规则与 P90=141000000ns 测试 |
+| 5/10 + CV + Type-7 P90 | typed statistics module | P90=141000000ns 与 `UINT64_MAX` 独立 typed oracle |
 | BLOCKED_ENV 可操作修复 | 空 raw/model/scenarios + 最低修复 | blocked payload 真实进程测试 |
 | 真实 Analytical 消费 | 加载 DerivedCostModel 且携 raw digest/合法 EP4 subgroup | 输出 timing=61943ns 的真实进程测试 |
 
-本地验证按 CMake glob/exclude 得到 62 个源文件并完成真实链接；测试总数为 105。
+本地验证按 CMake glob/exclude 得到 62 个源文件并完成真实链接；测试总数为 108。
 真实 A2 环境尚未满足 L0，因此本交付状态是
 `READY_FOR_REREVIEW_WITH_BLOCKED_ENV`，不是 Issue 完成或 Ground Truth READY。
 

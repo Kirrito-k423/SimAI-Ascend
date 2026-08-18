@@ -1,7 +1,7 @@
 {
   "apiVersion": "simai.ascend.profile/v1alpha1",
   "kind": "AscendHardwareProfile",
-  "schemaSemver": "0.1.0",
+  "schemaSemver": "0.2.0",
   "metadata": {
     "id": "test-only-a2-world8-profile"
   },
@@ -86,6 +86,7 @@
       {
         "id": "a2-profile-input",
         "class": "USER_INPUT",
+        "readiness": "FIELD_UNVERIFIED",
         "source": {
           "uri": "fixture://issue-21/a2-world8-profile",
           "ref": "test-only-v2"
