@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "HcclCostModel.h"
 #include "astra-sim/system/Common.hh"
@@ -40,6 +41,7 @@ struct AnalyticalRunContract {
   std::string run_id = "UNKNOWN";
   std::string backend = "analytical";
   std::string workload_path;
+  std::string workload_snapshot;
   std::string run_manifest_sha256 = "UNKNOWN";
   std::string workload_sha256 = "UNKNOWN";
   std::string binary_sha256 = "UNKNOWN";
@@ -66,6 +68,8 @@ struct AnalyticalRunContract {
   bool target_workload_present = false;
   bool target_workload_ready = false;
   std::string target_workload_sha256 = "UNKNOWN";
+  std::string target_runtime_record_format = "UNKNOWN";
+  std::vector<std::string> target_runtime_specific_parallelism;
   bool target_model_ready = false;
   std::string target_model_sha256 = "UNKNOWN";
   std::string target_model_evidence_level = "UNKNOWN";

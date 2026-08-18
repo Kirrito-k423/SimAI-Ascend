@@ -253,7 +253,8 @@ class Sys : public Callable {
       int _ngpus_per_node,
       CollectiveCostModel* _collective_cost_model = nullptr,
       std::string _collective_topology_domain = "",
-      std::string _collective_topology_digest = "");
+      std::string _collective_topology_digest = "",
+      const std::string* _workload_snapshot = nullptr);
 
   void iterate();
   bool initialize_sys(std::string name);

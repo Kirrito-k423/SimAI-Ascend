@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import hashlib
+import copy
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 
 
@@ -160,9 +162,17 @@ class AnalyticalRunContractTest(unittest.TestCase):
         mutate_manifest=None,
         mutate_workload=None,
         workload_layer_count=1,
+        target_workload_format="STANDARD",
+        target_specific_parallelism="MODEL",
+        target_forward_collective="NONE",
+        target_forward_bytes=0,
+        target_weight_collective="NONE",
+        target_weight_bytes=0,
+        ascend_profiled=False,
         artifact_sizes=None,
         raw_replacements=None,
         stdin_resource=None,
+        atomic_workload_replacement=None,
     ):
         """Rebind all Target Workload digests, then run the real process."""
         model = json.loads(
@@ -266,8 +276,13 @@ class AnalyticalRunContractTest(unittest.TestCase):
             )
             workload_document = {
                 "header": (
-                    "HYBRID_TRANSFORMER model_parallel_NPU_group: 1 ep: 1 "
-                    "pp: 1 vpp: 1 ga: 1 all_gpus: 1 checkpoints: 0 "
+                    ("HYBRID_CUSTOMIZED" if target_workload_format == "CUSTOMIZED"
+                     else "HYBRID_TRANSFORMER")
+                    + " model_parallel_NPU_group: "
+                    + ("4" if ascend_profiled else "1")
+                    + " ep: 1 pp: 1 vpp: 1 ga: 1 all_gpus: "
+                    + ("4" if ascend_profiled else "1")
+                    + " checkpoints: 0 "
                     "checkpoint_initiates: 0 pp_comm 0 "
                     "target_model_sha256: " + model_digest + " "
                     "target_step_sha256: " + step_digest + " "
@@ -277,8 +292,17 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 ),
                 "layers": [
                     (
-                        f"target_layer_{layer}\t-1\t10\tNONE\t0\t10\tNONE\t0"
-                        f"\t10\tNONE\t0\t10\t" + "\t".join(binding_values)
+                        f"target_layer_{layer}\t-1\t10"
+                        f"\t{target_forward_collective}"
+                        f"\t{target_forward_bytes}\t10\tNONE\t0"
+                        f"\t10\t{target_weight_collective}"
+                        f"\t{target_weight_bytes}\t10\t"
+                        + (
+                            target_specific_parallelism + "\t"
+                            if target_workload_format == "CUSTOMIZED"
+                            else ""
+                        )
+                        + "\t".join(binding_values)
                     )
                     for layer in range(workload_layer_count)
                 ],
@@ -299,8 +323,57 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 workload_path.read_bytes()
             ).hexdigest()
             manifest["workload"]["target_workload_sha256"] = composite_digest
+            if ascend_profiled:
+                manifest.pop("legacy_gpu", None)
+                for key, fixture_name in (
+                    ("device_profile", "minimal_ascend_profile.json"),
+                    (
+                        "collective_cost_model",
+                        "minimal_hccl_allreduce_cost_model.json",
+                    ),
+                ):
+                    fixture_path = FIXTURES / fixture_name
+                    manifest[key] = {
+                        "path": str(fixture_path),
+                        "sha256": "sha256:" + hashlib.sha256(
+                            fixture_path.read_bytes()
+                        ).hexdigest(),
+                    }
             if mutate_manifest is not None:
                 mutate_manifest(manifest)
+
+            replacement_thread = None
+            replacement_errors = []
+            if atomic_workload_replacement is not None:
+                replacement_document = copy.deepcopy(workload_document)
+                atomic_workload_replacement(replacement_document)
+                replacement_content = (
+                    replacement_document["header"]
+                    + "\n"
+                    + str(len(replacement_document["layers"]))
+                    + "\n"
+                    + "\n".join(replacement_document["layers"])
+                    + "\n"
+                )
+                replacement_path = run_directory / "replacement-workload.txt"
+                replacement_path.write_text(replacement_content)
+                model_fifo = run_directory / "model-read-barrier.fifo"
+                os.mkfifo(model_fifo)
+                target["model"]["path"] = str(model_fifo)
+
+                def replace_after_model_reader_opens():
+                    try:
+                        with model_fifo.open("w") as pipe:
+                            os.replace(replacement_path, workload_path)
+                            pipe.write(artifact_contents["model"])
+                    except BaseException as error:
+                        replacement_errors.append(error)
+
+                replacement_thread = threading.Thread(
+                    target=replace_after_model_reader_opens,
+                    daemon=True,
+                )
+                replacement_thread.start()
             manifest_path, _ = write_artifact("run", "run.json", manifest)
             result_path = run_directory / "result.json"
             completed = subprocess.run(
@@ -323,6 +396,12 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 timeout=30,
                 check=False,
             )
+            if replacement_thread is not None:
+                replacement_thread.join(timeout=5)
+                if replacement_thread.is_alive():
+                    self.fail("model-read barrier writer did not finish")
+                if replacement_errors:
+                    raise replacement_errors[0]
             result = json.loads(result_path.read_text())
         return completed, result
 
@@ -1274,6 +1353,8 @@ class AnalyticalRunContractTest(unittest.TestCase):
                 "routing_sha256": resource_digests[2],
                 "memory_event_plan_sha256": resource_digests[3],
                 "target_workload_sha256": expected_composite,
+                "runtime_record_format": "STANDARD",
+                "runtime_specific_parallelism": ["NONE"],
             },
         )
         for resource in (
@@ -1562,6 +1643,65 @@ class AnalyticalRunContractTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 0)
         self.assertEqual(result["status"], "VALID")
         self.assertEqual(result["readiness"]["target_workload"], "READY")
+
+    def test_target_bound_customized_event_applies_specific_parallelism(self):
+        completed, result = self.run_mutated_target_contract(
+            target_workload_format="CUSTOMIZED",
+            target_specific_parallelism="DATA",
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(
+            result["results"]["target_workload"]["aicb_execution_binding"]
+            ["runtime_record_format"],
+            "CUSTOMIZED",
+        )
+        self.assertEqual(
+            result["results"]["target_workload"]["aicb_execution_binding"]
+            ["runtime_specific_parallelism"],
+            ["DATA"],
+        )
+
+    def test_target_bound_customized_event_requires_specific_parallelism(self):
+        def remove_specific_parallelism(workload):
+            fields = workload["layers"][0].split("\t")
+            self.assertEqual(fields[12], "DATA")
+            del fields[12]
+            workload["layers"][0] = "\t".join(fields)
+
+        completed, result = self.run_mutated_target_contract(
+            target_workload_format="CUSTOMIZED",
+            target_specific_parallelism="DATA",
+            mutate_workload=remove_specific_parallelism,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(
+            result["reject_code"], "TARGET_AICB_EVENT_BINDING_MISSING"
+        )
+
+    def test_target_workload_execution_uses_the_verified_byte_snapshot(self):
+        def replace_one_mib_with_two_mib(workload):
+            fields = workload["layers"][0].split("\t")
+            self.assertEqual(fields[4], "1048576")
+            fields[4] = "2097152"
+            workload["layers"][0] = "\t".join(fields)
+
+        completed, result = self.run_mutated_target_contract(
+            target_forward_collective="ALLREDUCE",
+            target_forward_bytes=1_048_576,
+            ascend_profiled=True,
+            atomic_workload_replacement=replace_one_mib_with_two_mib,
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(result["results"]["timing_ns"], 61_943)
+        self.assertEqual(
+            result["results"]["collective_payload"]["input_B_per_rank"],
+            1_048_576,
+        )
 
     def test_arbitrary_legacy_workload_cannot_claim_the_target_contract(self):
         def replace_with_legacy(workload):

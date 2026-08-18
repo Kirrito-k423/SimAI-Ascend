@@ -82,6 +82,7 @@ class Workload : Callable {
   int vpp;
   uint32_t pp_commsize;
   ParallelismPolicy parallelismPolicy;
+  bool customized_layer_records;
   Tick waiting_for_comm;
   Workload(
       std::string run_name,
@@ -91,8 +92,10 @@ class Workload : Callable {
       int total_rows,
       int stat_row,
       std::string path,
-      bool seprate_log);
+      bool seprate_log,
+      const std::string* workload_snapshot = nullptr);
   ParallelismPolicy decode_parallelsim(std::string parallelism);
+  std::string parallelism_policy_name(ParallelismPolicy policy) const;
   void call(EventType event, CallData* data);
   void iterate_micro_benchmark();
   void iterate_data_parallel();
@@ -104,7 +107,8 @@ class Workload : Callable {
   void iterate_hybrid_parallel_customized();
   void iterate_model_parallel();
   void iterate_distributed_inference();
-  bool initialize_workload(std::string name);
+  bool initialize_workload(
+      std::string name, const std::string* workload_snapshot);
   void initialize_stat_files();
   std::map<std::string, std::vector<bool>> decode_involved_dimensions(
       ParallelismPolicy policy,

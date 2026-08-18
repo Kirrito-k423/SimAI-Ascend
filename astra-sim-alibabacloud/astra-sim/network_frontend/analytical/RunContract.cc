@@ -2629,7 +2629,7 @@ bool ValidateTargetWorkloadComposition(
         "Hash model, step, routing, and memory digests in canonical order.");
     return false;
   }
-  std::ifstream workload_input(contract->workload_path.c_str());
+  std::istringstream workload_input(contract->workload_snapshot);
   std::string header;
   std::string layer_count_line;
   if (!workload_input || !std::getline(workload_input, header) ||
@@ -4146,8 +4146,8 @@ enum class LegacyWorkloadCollectiveCheck {
 };
 
 LegacyWorkloadCollectiveCheck CheckLegacyWorkloadCollectives(
-    const std::string& path) {
-  std::ifstream input(path.c_str());
+    const std::string& workload_snapshot) {
+  std::istringstream input(workload_snapshot);
   std::string header;
   std::string layer_count_line;
   if (!input || !std::getline(input, header) ||
@@ -4334,8 +4334,7 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
         "Set workload.sha256 to sha256:<64 lowercase hex digits>.");
     return contract;
   }
-  contract.workload_sha256 = FileSha256(contract.workload_path);
-  if (contract.workload_sha256 == "UNKNOWN") {
+  if (!ReadFile(contract.workload_path, &contract.workload_snapshot)) {
     Reject(
         &contract,
         "WORKLOAD_NOT_FOUND",
@@ -4343,6 +4342,8 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
         "Provide a readable public workload artifact.");
     return contract;
   }
+  contract.workload_sha256 =
+      "sha256:" + Sha256Hex(contract.workload_snapshot);
   if (declared_workload_sha256 != contract.workload_sha256) {
     Reject(
         &contract,
@@ -4439,7 +4440,7 @@ AnalyticalRunContract LoadAnalyticalRunContract(int argc, char* argv[]) {
   const LegacyWorkloadCollectiveCheck collective_check =
       contract.target_workload_present
       ? LegacyWorkloadCollectiveCheck::NoAllToAllV
-      : CheckLegacyWorkloadCollectives(contract.workload_path);
+      : CheckLegacyWorkloadCollectives(contract.workload_snapshot);
   if (collective_check ==
       LegacyWorkloadCollectiveCheck::InvalidAllToAllVVariant) {
     Reject(
@@ -4909,7 +4910,20 @@ bool WriteAnalyticalResultManifest(
                << ", \"memory_event_plan_sha256\": "
                << Quote(contract.target_memory_event_plan_sha256)
                << ", \"target_workload_sha256\": "
-               << Quote(contract.target_workload_sha256) << "}},\n";
+               << Quote(contract.target_workload_sha256)
+               << ", \"runtime_record_format\": "
+               << Quote(contract.target_runtime_record_format)
+               << ", \"runtime_specific_parallelism\": [";
+        for (size_t layer = 0;
+             layer < contract.target_runtime_specific_parallelism.size();
+             ++layer) {
+          if (layer != 0U) {
+            output << ", ";
+          }
+          output << Quote(
+              contract.target_runtime_specific_parallelism[layer]);
+        }
+        output << "]}},\n";
       } else {
         output << "\"UNKNOWN\"},\n";
       }

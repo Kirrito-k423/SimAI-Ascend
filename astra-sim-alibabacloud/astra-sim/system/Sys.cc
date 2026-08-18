@@ -141,7 +141,8 @@ Sys::Sys(
     int _ngpus_per_node,
     CollectiveCostModel* _collective_cost_model,
     std::string _collective_topology_domain,
-    std::string _collective_topology_digest) {
+    std::string _collective_topology_digest,
+    const std::string* _workload_snapshot) {
   scheduler_unit = nullptr;
   vLevels = nullptr;
   memBus = nullptr;
@@ -296,7 +297,8 @@ Sys::Sys(
       total_stat_rows,
       stat_row,
       path,
-      this->seprate_log);
+      this->seprate_log,
+      _workload_snapshot);
   if (workload->initialized == false) {
     sys_panic(
         "Unable to initialize the workload layer because it can not open the workload file");

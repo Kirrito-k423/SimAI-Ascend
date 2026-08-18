@@ -35,7 +35,8 @@ Workload::Workload(
     int total_rows,
     int stat_row,
     std::string path,
-    bool seprate_log) {
+    bool seprate_log,
+    const std::string* workload_snapshot) {
   this->initialized = false;
   this->layers = nullptr;
   this->SIZE = 0;
@@ -43,6 +44,7 @@ Workload::Workload(
   this->delay_loaded = false;
   this->checkpoint_initiated = false;
   this->collective_issued = false;
+  this->customized_layer_records = false;
   this->current_state = LoopState::Forward_Pass;
   this->generator = generator;
   this->TOTAL_PASS = TOTAL_PASS;
@@ -55,7 +57,7 @@ Workload::Workload(
   this->path = path;
   this->stat_row = stat_row;
   this->seprate_log = seprate_log;
-  this->initialized = initialize_workload(name);
+  this->initialized = initialize_workload(name, workload_snapshot);
   if (this->initialized == false) {
     return;
   }
@@ -1070,6 +1072,37 @@ ParallelismPolicy Workload::decode_parallelsim(std::string parallelism) {
   else
     return ParallelismPolicy::None;
 }
+std::string Workload::parallelism_policy_name(ParallelismPolicy policy) const {
+  switch (policy) {
+    case ParallelismPolicy::MicroBenchmark:
+      return "MICRO";
+    case ParallelismPolicy::Data:
+      return "DATA";
+    case ParallelismPolicy::Transformer:
+      return "HYBRID_TRANSFORMER";
+    case ParallelismPolicy::TransformerFwdInBckwd:
+      return "HYBRID_TRANSFORMER_FWD_IN_BCKWD";
+    case ParallelismPolicy::DLRM:
+      return "HYBRID_DLRM";
+    case ParallelismPolicy::DLRMEnhanced:
+      return "HYBRID_DLRM_ENHANCED";
+    case ParallelismPolicy::Model:
+      return "MODEL";
+    case ParallelismPolicy::HybridDataModel:
+      return "HYBRID_DATA_MODEL";
+    case ParallelismPolicy::HybridModelData:
+      return "HYBRID_MODEL_DATA";
+    case ParallelismPolicy::HybridCustomized:
+      return "HYBRID_CUSTOMIZED";
+    case ParallelismPolicy::DistributedInference:
+      return "DISTRIBUTED_INFERENCE";
+    case ParallelismPolicy::All:
+      return "ALL";
+    case ParallelismPolicy::None:
+      return "NONE";
+  }
+  return "NONE";
+}
 std::map<std::string, std::vector<bool>> Workload::decode_involved_dimensions(
     ParallelismPolicy policy,
     int model_parallel_npu_group) {
@@ -1132,12 +1165,21 @@ std::map<std::string, std::vector<bool>> Workload::decode_involved_dimensions(
   }
   return result;
 }
-bool Workload::initialize_workload(std::string name) {
+bool Workload::initialize_workload(
+    std::string name, const std::string* workload_snapshot) {
   std::map<int, bool> chekpoints;
   std::map<int, bool> need_checkpoint_initiation;
-  std::ifstream inFile;
-  inFile.open(name);
-  if (!inFile) {
+  std::ifstream workload_file;
+  std::istringstream snapshot_input;
+  std::istream* workload_input = nullptr;
+  if (workload_snapshot != nullptr) {
+    snapshot_input.str(*workload_snapshot);
+    workload_input = &snapshot_input;
+  } else {
+    workload_file.open(name);
+    workload_input = &workload_file;
+  }
+  if (!*workload_input) {
     std::cerr << "Unable to open file: " << name << std::endl;
     std::cerr << "######### Exiting because unable to open the workload input "
                  "file #########"
@@ -1150,6 +1192,7 @@ bool Workload::initialize_workload(std::string name) {
       std::cout << "Success in opening workload file" << std::endl;
     }
   }
+  std::istream& inFile = *workload_input;
   std::string firstline;
   std::getline(inFile,firstline);
   WorkloadLayerRecordFormat layer_record_format;
@@ -1157,9 +1200,11 @@ bool Workload::initialize_workload(std::string name) {
           firstline, &layer_record_format, &target_workload_binding)) {
     return false;
   }
+  customized_layer_records =
+      WorkloadLayerRecordFormatIsCustomized(layer_record_format);
   // std::cout << "First line is : '" << firstline << "'" << std::endl;
   std::istringstream iss(firstline);
-  std:string token;
+  std::string token;
   std::vector<std::string> tokens;
   // bool findparallesimPolcy = false;
   
@@ -1250,7 +1295,6 @@ bool Workload::initialize_workload(std::string name) {
           std::cerr << "######### Exiting because unable to decode the workload "
                  "parallelization strategy #########"
                   << std::endl;
-          inFile.close();
           exit(1);
           #else
           parallelismPolicy = ParallelismPolicy::TransformerFwdInBckwd;
@@ -1546,8 +1590,7 @@ bool Workload::initialize_workload(std::string name) {
       std::cout << "id: " << id << " , depen: " << depen
                 << " , wg_comp_time: " << wg_compute_time << std::endl;
     }
-    if (layer_record_format ==
-        WorkloadLayerRecordFormat::HybridCustomized13) {
+    if (WorkloadLayerRecordFormatIsCustomized(layer_record_format)) {
       specific_policy = decode_parallelsim(record.specific_parallelism);
     }
     if ((parallelismPolicy == ParallelismPolicy::DLRM ||
@@ -1599,7 +1642,6 @@ bool Workload::initialize_workload(std::string name) {
               << " compute scale: " << generator->compute_scale
               << " ,comm scale: " << generator->comm_scale << std::endl;
   }
-  inFile.close();
   return true;
 }
 void Workload::fire() {

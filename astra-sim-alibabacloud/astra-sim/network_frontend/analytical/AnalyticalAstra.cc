@@ -23,6 +23,7 @@
 #include "astra-sim/system/MockNcclLog.h"
 #include "astra-sim/system/AstraComputeAPI.hh"
 #include "astra-sim/system/AstraParamParse.hh"
+#include "astra-sim/workload/Layer.hh"
 
 #include "AnalyticalNetwork.h"
 #include "AnaSim.h"
@@ -177,8 +178,20 @@ int main(int argc,char *argv[]) {
     param->net_work_param.gpus_per_server,
     hccl_cost_model.get(),
     run_contract.topology_domain,
-    run_contract.topology_digest
+    run_contract.topology_digest,
+    run_contract.enabled ? &run_contract.workload_snapshot : nullptr
   );
+  if (run_contract.target_workload_ready) {
+    run_contract.target_runtime_record_format =
+        systems->workload->customized_layer_records
+            ? "CUSTOMIZED"
+            : "STANDARD";
+    for (int layer = 0; layer < systems->workload->SIZE; ++layer) {
+      run_contract.target_runtime_specific_parallelism.push_back(
+          systems->workload->parallelism_policy_name(
+              systems->workload->layers[layer]->specific_parallellism));
+    }
+  }
   systems->nvswitch_id = node2nvswitch[0];
   systems->num_gpus = using_num_gpus - param->net_work_param.nvswitch_num;
   

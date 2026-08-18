@@ -25,7 +25,7 @@
 simai.run/v1 -> real SimAI_analytical process -> simai.result/v1
 ```
 
-`target_workload` 是 Run Manifest 内的组合身份，不是第五份可变资源。它按固定顺序组合四个资源 digest：Model 定义 canonical tensor-type registry 与模型身份；Step 绑定 Model 并定义 GTS；Routing 绑定 Model+Step 并只描述外部 routing policy；Memory 绑定 Model+Step+Routing 并描述七类对象的 lifetime、符号表达式和 policy 依赖。入口先对组合 envelope/reference shape 做 exact-key 校验，再进行四个有明确 byte limit 的单流 `max+1` 读取；因此非法 envelope 不触碰其指向的文件、FIFO 或设备。资源从叶到根逐层校验，最后要求真实 AICB header 及每层 event 都携带同一组四资源 digest 和 composite digest。任一缺失、摘要不一致、证据不完整或 schema 不闭合都会 fail closed；先通过的下层资源仍保留其 `READY` 身份，失败层与组合层标记为 `BLOCKED`。
+`target_workload` 是 Run Manifest 内的组合身份，不是第五份可变资源。它按固定顺序组合四个资源 digest：Model 定义 canonical tensor-type registry 与模型身份；Step 绑定 Model 并定义 GTS；Routing 绑定 Model+Step 并只描述外部 routing policy；Memory 绑定 Model+Step+Routing 并描述七类对象的 lifetime、符号表达式和 policy 依赖。入口只打开 workload path 一次，把完整 bytes 保存为不可变 snapshot；摘要、composition/AICB 校验和随后真实 `Workload` 的运行时解析都消费这同一份 bytes，校验与启动之间的路径原子更新不会改变本次执行。入口先对组合 envelope/reference shape 做 exact-key 校验，再进行四个有明确 byte limit 的单流 `max+1` 读取；因此非法 envelope 不触碰其指向的文件、FIFO 或设备。资源从叶到根逐层校验，最后要求真实 AICB header 及每层 event 都携带同一组四资源 digest 和 composite digest。任一缺失、摘要不一致、证据不完整或 schema 不闭合都会 fail closed；先通过的下层资源仍保留其 `READY` 身份，失败层与组合层标记为 `BLOCKED`。
 
 模型逻辑参数、checkpoint auxiliary elements、checkpoint storage bytes 和 active logical parameters 都从 76 项 canonical tensor type registry 的 logical/storage shape、dtype、role、scope、kind、instances 受检查重建，不信任声明汇总。active logical parameters 分成三个明确 scope；fixed-quantized checkpoint bytes 只作为模型 provenance 输出。JSON parser 保留 number 原始词法，Target 整数消费端只接受 canonical unsigned decimal，并做 JSON-safe/range/checked arithmetic 校验；HCCL 的合法浮点字段仍走既有 `double` 路径。
 
@@ -38,10 +38,11 @@ Memory Event Plan 有两种合法状态：
 
 ### 2.2 开发视图
 
-- `analytical/RunContract.h`：在 #16–#18 的 `AnalyticalRunContract` 上保存 Target 四资源身份、GTS、模型计数、显存分项和 gate 状态。
-- `analytical/RunContract.cc`：复用既有 JSON parser、SHA-256、evidence/readiness 与 Result writer；新增 exact schema、四资源 bounded loader、tensor registry 重建、checked arithmetic、composite/AICB binding validator 和显存 gate。
+- `analytical/RunContract.h`：在 #16–#18 的 `AnalyticalRunContract` 上保存 Target 四资源身份、GTS、模型计数、显存分项、gate 状态以及首读 workload byte snapshot。
+- `analytical/RunContract.cc`：复用既有 JSON parser、SHA-256、evidence/readiness 与 Result writer；新增 exact schema、四资源 bounded loader、tensor registry 重建、checked arithmetic、基于 snapshot 的 composite/AICB binding validator 和显存 gate。
 - `workload/WorkloadCollectiveDecoder.hh`：共享解析 legacy 12/13-column 与 target-bound 17/18-column AICB event；header 和 event 都携带五个 digest。
-- `workload/Workload.{hh,cc}` 与 `Layer.{hh,cc}`：真实 runtime 用同一 decoder 消费 binding，逐层 exact 比对，并把 event binding 存入实际 `Layer`，不是 Result writer 事后合成。
+- `system/Sys.{hh,cc}` 与 `workload/Workload.{hh,cc}`：Run Contract 路径注入已验证 snapshot，`Workload` 用内存流解析而不重新打开路径；legacy CLI 未注入 snapshot 时仍保持原文件读取。
+- `workload/Workload.{hh,cc}` 与 `Layer.{hh,cc}`：真实 runtime 用同一 decoder 消费 binding，逐层 exact 比对，并把 event binding 与 18 列的 `specific_parallelism` 存入实际 `Layer`；Result 的 runtime attestation 从这些实际对象回读，不由 writer 重解 workload。
 - `tests/contract/fixtures/target_*.json` 与 `target_10t_workload.txt`：保存公开来源或纯合成的脱敏 Model/Step/Routing/Memory/Run/AICB fixture；无主机、IP、账号、凭据或现场日志。
 - `tests/contract/test_analytical_run_contract.py`：通过临时复制和重算引用 digest 构造正负例，只观察真实进程退出码和 Result Manifest；参数、GTS、内存边界另用独立 Python 算术 oracle。
 - `docs/design/issue-19-design.md`：冻结最终数据契约、对象协作、失败语义和后续边界。
@@ -52,7 +53,7 @@ Memory Event Plan 有两种合法状态：
 
 ```mermaid
 flowchart TD
-    A["启动真实 SimAI_analytical"] --> B["读取 simai.run/v1；校验 workload digest"]
+    A["启动真实 SimAI_analytical"] --> B["单次读取 workload bytes；保存 snapshot 并校验 digest"]
     B --> C{"存在 target_workload?"}
     C -- "否" --> L["#16-#18 legacy GPU / HCCL 路径"]
     C -- "是" --> V["先 exact 校验 envelope 与四个 ref；此时无 artifact I/O"]
@@ -61,9 +62,9 @@ flowchart TD
     E --> F["加载 Routing；校验 Model+Step digest 与 policy"]
     F --> G["加载 Memory；校验 Model+Step+Routing digest、lifetime、binding"]
     G --> H["按固定顺序计算四资源 composite digest"]
-    H --> I{"AICB header 与每层 event 的五 digest 都一致?"}
+    H --> I{"从同一 snapshot 校验 AICB header 与每层 event 的五 digest?"}
     I -- "否" --> X["写 INVALID_INPUT/UNSUPPORTED + BLOCKED Result"]
-    I -- "是" --> U["Workload decoder 再消费 binding；传播到真实 Layer"]
+    I -- "是" --> U["Sys 注入同一 snapshot；Workload decoder 消费 binding/specific policy 并传播到真实 Layer"]
     U -- "全部 UNBOUND" --> S["输出七类 SYMBOLIC/UNKNOWN；HBM UNKNOWN"]
     U -- "全部 BOUND" --> M["验证 component sum、base/reserve/usable 与 observed peak"]
     M --> N{"planned peak <= floor(usable*95/100)?"}
@@ -84,7 +85,7 @@ flowchart TD
 
 ### 2.4 物理视图
 
-实现仅依赖本地 CPU、文件系统、C++17 验证工具链和现有 Analytical 二进制；生产代码没有网络/NPU依赖。artifact path 只用于输入解析，Result 仅输出内容摘要、受控 resource id、枚举和数字，不回显本地路径或进程日志。
+实现仅依赖本地 CPU、文件系统、C++11 验证工具链和现有 Analytical 二进制；生产代码没有网络/NPU依赖。artifact path 只用于输入解析，Result 仅输出内容摘要、受控 resource id、枚举和数字，不回显本地路径或进程日志。
 
 开发验证在 macOS arm64 上以与正式 CMake glob/exclude 等价的 61-source Clang 链接完成。没有运行真实 NPU、CANN 或远端命令，因此没有机器占用或 NPU 文件锁等待。
 
@@ -99,6 +100,8 @@ flowchart TD
 7. 闭包损坏：改变任一资源内容而不更新 reference，或改变下层 dependency digest、composite digest、AICB header/event 任一 hash，均在真实进程中以稳定码拒绝并保留已验证层的 readiness；任意 legacy workload 不能冒充同一 10T target。
 8. evidence 损坏：四资源各自的 `evidenceRef` 必须唯一解析到一个 record，且 record class/readiness 与 spec 完全一致；缺失、歧义、非法枚举或冲突均阻断该层。
 9. scope guard：Routing 顶层、spec、policy、数组或 snake_case/synonym 中的未知字段统一由 exact schema 返回 `TARGET_ROUTING_SCHEMA_INVALID`；因此 #20 字段无需易漏的三字段黑名单。
+10. 不可变执行：Model FIFO 的 open 握手作为确定性同步点，在 workload 首读和 Model 加载之间原子替换 path；Result 仍执行并证明旧 snapshot 的 1 MiB event，而不是新 path 的 2 MiB event。
+11. customized event：target-bound `HYBRID_CUSTOMIZED` 的 18 列记录由 `WorkloadLayerRecordFormatIsCustomized` 单一判定消费 `specific_parallelism`；Result 从每个实际 `Layer` 回读 `CUSTOMIZED/[DATA]`，缺列稳定 fail closed。
 
 ## 3. 类图与对象职责
 
@@ -106,6 +109,9 @@ flowchart TD
 classDiagram
     class AnalyticalRunContract {
       +target_workload_sha256 string
+      +workload_snapshot bytes
+      +target_runtime_record_format string
+      +target_runtime_specific_parallelism string[]
       +target_*_sha256 string
       +target_configured_gts uint64
       +target_logical_trainable_parameters uint64
@@ -155,12 +161,12 @@ classDiagram
     TargetMemoryValidator --> TargetCompositeValidator : four resource digests
     TargetCompositeValidator --> AnalyticalRunContract : verified values/readiness
     TargetCompositeValidator --> WorkloadCollectiveDecoder : header/event verification
-    AnalyticalRunContract --> UpstreamRuntime : accepted run
+    AnalyticalRunContract --> UpstreamRuntime : accepted run + immutable workload snapshot
     UpstreamRuntime --> WorkloadCollectiveDecoder : same binding consumed by Workload/Layer
     ResultManifestWriter --> AnalyticalRunContract : validated summary only
 ```
 
-图中的 validator 是 `RunContract.cc` 内的职责边界，不是额外公开 ABI。JSON parser 不泄漏到 `Sys/Workload/Layer`；runtime 只知道 AICB header/event 的五-digest binding，不知道四份 JSON artifact 的内部 schema。Result writer 不重新打开 artifact、不合成 event binding，也不重新推导模型/GTS。
+图中的 validator 是 `RunContract.cc` 内的职责边界，不是额外公开 ABI。JSON parser 不泄漏到 `Sys/Workload/Layer`；runtime 只知道 AICB snapshot、header/event 的五-digest binding，不知道四份 JSON artifact 的内部 schema。Result writer 不重新打开 artifact、不合成 event binding，也不重新推导模型/GTS；`runtime_record_format` 与逐层 `runtime_specific_parallelism` 在真实 `Workload/Layer` 构造完成后回填。
 
 ## 4. 输入、协作、状态与输出契约
 
@@ -193,7 +199,7 @@ Composite 的 byte string 是以下四个完整 digest identifier 按固定次�
 sha256:<model>\nsha256:<step>\nsha256:<routing>\nsha256:<memory>
 ```
 
-`SHA-256(byte string)` 必须等于 `target_workload.sha256`。Run 的旧 `workload.target_workload_sha256` 即使存在也只是非权威兼容字段；生产身份来自 AICB 文件自身。AICB header 以具名字段携带 model/step/routing/memory/composite 五个 digest，标准 event 在原 12 列后追加相同五列（17 列），`HYBRID_CUSTOMIZED` event 在原 13 列后追加五列（18 列）。RunContract 校验每个 declared event，随后真实 `Workload` 用同一 decoder 再消费并把 binding 传给 `Layer`。
+`SHA-256(byte string)` 必须等于 `target_workload.sha256`。Run 的旧 `workload.target_workload_sha256` 即使存在也只是非权威兼容字段；生产身份来自 AICB 文件自身。workload path 在 RunContract 中只读取一次，原始 bytes 存入 `workload_snapshot`；摘要、下述 header/event 校验和 `Sys -> Workload` 运行时解析都使用这份 snapshot。AICB header 以具名字段携带 model/step/routing/memory/composite 五个 digest，标准 event 在原 12 列后追加相同五列（17 列），`HYBRID_CUSTOMIZED` event 在原 13 列 `specific_parallelism` 后追加五列（18 列）。RunContract 校验每个 declared event，随后真实 `Workload` 用同一 decoder 再消费并把 binding 与 decoded specific policy 传给 `Layer`。Result 的 `aicb_execution_binding` 附加 `runtime_record_format` 和逐层 `runtime_specific_parallelism`，用于证明 13/18 列在实际 runtime 采用同一 customized 判定。
 
 组合 envelope 与四个 `{path,sha256}` reference 在任何资源 I/O 前做 exact-key/type/digest 校验。四资源使用同一个 `max+1` single-stream loader，限制分别为 Model 256 KiB、Step 64 KiB、Routing 64 KiB、Memory 128 KiB；恰好上限可读，上限加一稳定返回 `TARGET_*_ARTIFACT_TOO_LARGE`，并支持 `/dev/stdin` 这类 non-seekable 流。非法 envelope 指向不存在文件或 FIFO 时也先以 `TARGET_WORKLOAD_SCHEMA_INVALID` 拒绝，不打开路径。
 
@@ -318,13 +324,14 @@ PASS iff observed_execution_peak_B × 100 < base_hbm_B × 85
 | --- | --- |
 | 冻结 8,414,884,746,526 与 2048/16/3072/1 | 正例断言 Result；独立 Python 任意精度 oracle 从 76 项 logical/storage shape、dtype 与 instances 重建 logical/aux/storage/三 scope；缺/重/未知/shape 不闭合均有 registry 稳定码 |
 | GTS=sequence×MBS×DP×GA，500M 可用，超过拒绝 | 500M 正例；500,000,001 稳定码；零/负/float/unsafe、raw fraction/exponent/leading token、`uint64_t` 边界/乘法溢出、声明不一致和 routed slots 不一致均有真实进程负例 |
-| 四资源内容寻址组合 | 断言 Result 四 digest/composite；正确 AICB header/event、任意 legacy 替换、header 单 hash、event 缺失/篡改与三层 event 传播均走真实进程；`Workload/Layer` 使用同一 decoder |
+| 四资源内容寻址组合 | 断言 Result 四 digest/composite；正确 AICB header/event、任意 legacy 替换、header 单 hash、event 缺失/篡改与三层 event 传播均走真实进程；`Workload/Layer` 使用同一 decoder；FIFO open 握手后原子替换 workload path 的测试证明摘要、composition 与 runtime 使用同一不可变 snapshot |
+| target-bound 18 列 specific policy | `HYBRID_CUSTOMIZED DATA` 正例从实际 Layer 回读 `CUSTOMIZED/[DATA]`；移除第 13 列稳定返回 `TARGET_AICB_EVENT_BINDING_MISSING`；标准 17 列回读 `STANDARD/[NONE]` |
 | bounded I/O 与 exact schema | 四资源恰好 byte limit/limit+1、Routing `/dev/stdin`、非法 envelope 指向不存在路径/FIFO；metadata/spec/source/architecture/registry/entry/policy/bindings/component/capacity/evidence 未知 key/type/id mutation |
 | evidence/readiness fail closed | 四资源逐一测试 missing/unresolved/ambiguous ref、非法 record readiness、spec/record class/readiness 冲突，Result 不伪造 READY evidence |
 | 七类显存分别呈现 | symbolic 正例断言准确 key 集、unit、expression；物化例断言七项总和等于 peak；表达式/lifetime/依赖 mutation 被拒绝 |
 | 未绑定保留 UNKNOWN；checkpoint 不是 HBM | 全 UNBOUND 正例断言七项、peak、两 gate 与 `hbm_peak_B` 均 UNKNOWN；checkpoint 只出现在 model storage 且 `used_as_training_hbm=false`；部分 binding 被拒绝 |
 | 95%/85% 恰好边界与越界 | 950/951 B 和 1699/1700/1701 B 均由真实进程测试；独立 Python oracle 验证 usable denominator、floor/strict 比较和 maximum accepted |
-| 不破坏 #16–#18 | 同一个 80-test suite 中保留 46 项既有真实进程回归，覆盖 legacy GPU、typed 12/13-column workload decoder、五类 collective、A2AV routing limits 与 HCCL model；Target 新增 17/18-column decoder 不改变 legacy |
+| 不破坏 #16–#18 | 同一个 83-test suite 中保留 46 项既有真实进程回归，覆盖 legacy GPU、typed 12/13-column workload decoder、五类 collective、A2AV routing limits 与 HCCL model；Target 新增 17/18-column decoder 与 snapshot 注入不改变 legacy |
 
 正式验证还包括：RunContract 严格 `-Wall -Wextra -Wpedantic -Werror` 编译、等价 CMake glob/exclude 的 61-source 完整链接、所有 fixture JSON 可解析、逐文件 SHA-256/分层 digest/composite 的独立复算、`git diff --check`、敏感信息扫描，以及 #20/#21/#28 scope-creep 扫描。
 
